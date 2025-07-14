@@ -68,6 +68,7 @@ PROGRAM ros_state
 %INCLUDE include\libssock_t
 %INCLUDE include\libind_pkt_t
 %INCLUDE include\libind_rs_t
+%INCLUDE include\libind_weld_t
 
 
 
@@ -93,6 +94,7 @@ VAR
 
 	jnt_pkt_out_           : ind_pkt_t    -- ROS-Industrial joint state packet
 	rs_pkt_out_            : ind_rs_t     -- ROS-Industrial robot status packet
+	weld_pkt_out_          : ind_weld_t   -- ROS-Industrial welding state packet
 	sock_                  : ssock_t      -- server socket instance
 	sock_fd_               : FILE         -- file descriptor associated with srvr socket
 	stat_                  : INTEGER      -- status variable
@@ -140,6 +142,7 @@ CONST
 %INCLUDE include\libind_log_h
 %INCLUDE include\libind_mth_h
 %INCLUDE include\libind_rs_h
+%INCLUDE include\libind_weld_h
 
 
 
@@ -152,6 +155,7 @@ CONST
 ROUTINE check_cfg_(cfg : rstate_cfg_t) : INTEGER FROM ros_state
 ROUTINE install_ah_ FROM ros_state
 ROUTINE remove_ah_ FROM ros_state
+ROUTINE iwd_srlise(VAR pkt : ind_weld_t; VAR fdesc : FILE) : INTEGER FROM ros_state
 
 
 
@@ -197,6 +201,16 @@ BEGIN
 		msg_type_  = RI_MT_JOINTP
 		comm_type_ = RI_CT_TOPIC
 		-- rest is set by ctor
+	ENDUSING
+
+	-- init welding packet
+	USING weld_pkt_out_ DO
+		-- Header (16 bytes) + Payload (4 bools as ints, 4 ints -> 4*4 + 4*4 = 32 bytes) = 48 bytes total.
+		hdr_.length_     = 48
+		hdr_.msg_type_   = RI_MT_WELDST
+		hdr_.comm_type_  = RI_CT_TOPIC
+		hdr_.reply_type_ = RI_RT_INVALID
+		-- data is filled in the loop
 	ENDUSING
 
 
@@ -264,6 +278,47 @@ BEGIN
 				-- exit inner loop
 				GOTO exit_inner
 			ENDIF
+
+			-- [WELDING MOD] read I/O, build and send welding packet
+			-- Read welding status from registers and populate the packet
+			VAR
+				status_word : INTEGER
+			BEGIN
+				status_word = R[WELD_R_STATUS_WORD]
+
+				USING weld_pkt_out_.weld_data_ DO
+					-- Unpack boolean flags from the status word using bitwise AND
+					-- EWM Bit 0: DI_ArcStability -> I>0
+					arc_ok        = (BAnd(status_word, 1) <> 0)
+					-- EWM Bit 1: DI_WeldingPSReady -> Welder Ready
+					ready         = (BAnd(status_word, 2) <> 0)
+					-- EWM Bit 2: DI_Stick -> Wire Stick
+					stick_err     = (BAnd(status_word, 4) <> 0)
+					-- EWM Bit 3: DI_Err -> General Error
+					general_err   = (BAnd(status_word, 8) <> 0)
+
+					-- Unpack the error code (EWM bits 8-15 / byte 1) by shifting right
+					err_code      = DIV(status_word, 256)
+
+					-- Read raw analog values from their mapped registers
+					act_voltage   = R[WELD_R_ACT_VOLT]
+					act_current   = R[WELD_R_ACT_CURR]
+					act_wire_spd  = R[WELD_R_ACT_WIRE]
+				ENDUSING
+			END
+
+			-- serialise welding packet, write to socket file descriptor
+			stat_ = iwd_srlise(weld_pkt_out_, sock_fd_)
+
+			-- check result
+			IF (stat_ <> 0) THEN
+				log_error_a(LOG_PFIX + 'weld_pkt_srlise err:', stat_)
+				-- remote probably disconnected
+				stat_ = ssock_dconn2(sock_, sock_fd_)
+				-- exit inner loop
+				GOTO exit_inner
+			ENDIF
+
 
 			-- 
 			IF (stat_count_ >= cfg_.sloop_div) THEN
@@ -344,6 +399,49 @@ BEGIN
 	-- all ok
 	RETURN (CFG_OK)
 END check_cfg_
+
+
+
+
+--------------------------------------------------------------------------------
+--
+-- [WELDING MOD] Serialise ind_weld_t packet and write to file descriptor.
+--
+--------------------------------------------------------------------------------
+ROUTINE iwd_srlise
+VAR
+	pkt       : ind_weld_t
+	fdesc     : FILE
+	bool_int  : INTEGER
+BEGIN
+	-- NOTE: This assumes direct binary writing of KAREL types matches
+	-- what the C++ client side will expect. This is generally true for
+	-- INTEGER and REAL. BOOLEANs must be converted to INTEGER (0 or 1).
+	-- The Simple Message protocol expects 4-byte alignment for members.
+
+	-- KAREL does not support writing STRUCTUREs directly. Must write field by field.
+	WRITE fdesc (pkt.hdr_.length_)
+	WRITE fdesc (pkt.hdr_.msg_type_)
+	WRITE fdesc (pkt.hdr_.comm_type_)
+	WRITE fdesc (pkt.hdr_.reply_type_)
+
+	-- Write weld_state_t payload, converting booleans to integers
+	IF pkt.weld_data_.arc_ok THEN bool_int = 1; ELSE bool_int = 0; ENDIF
+	WRITE fdesc (bool_int)
+	IF pkt.weld_data_.ready THEN bool_int = 1; ELSE bool_int = 0; ENDIF
+	WRITE fdesc (bool_int)
+	IF pkt.weld_data_.stick_err THEN bool_int = 1; ELSE bool_int = 0; ENDIF
+	WRITE fdesc (bool_int)
+	IF pkt.weld_data_.general_err THEN bool_int = 1; ELSE bool_int = 0; ENDIF
+	WRITE fdesc (bool_int)
+
+	WRITE fdesc (pkt.weld_data_.err_code)
+	WRITE fdesc (pkt.weld_data_.act_voltage)
+	WRITE fdesc (pkt.weld_data_.act_current)
+	WRITE fdesc (pkt.weld_data_.act_wire_spd)
+
+	RETURN (0)
+END iwd_srlise
 
 
 
