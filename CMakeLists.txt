@@ -6,10 +6,28 @@ set(CMAKE_CXX_STANDARD 11)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 # let industrial_robot_client pull in all other dependencies
-find_package(catkin REQUIRED COMPONENTS industrial_robot_client)
+find_package(catkin REQUIRED COMPONENTS 
+  industrial_robot_client
+  message_generation
+  std_msgs)
+
+# Add message files
+add_message_files(
+  FILES
+  WeldState.msg
+)
+
+# Generate messages
+generate_messages(
+  DEPENDENCIES
+  std_msgs
+)
 
 catkin_package(
-  CATKIN_DEPENDS industrial_robot_client
+  CATKIN_DEPENDS 
+    industrial_robot_client
+    message_runtime
+    std_msgs
 )
 
 include_directories(
@@ -52,6 +70,40 @@ target_compile_definitions(
   ${industrial_robot_client_bswap_DEFINITIONS})
 
 
+# non-swapping Fanuc specific weld state node
+add_executable(${PROJECT_NAME}_weld_state
+  src/fanuc_weld_state_node.cpp)
+target_link_libraries(${PROJECT_NAME}_weld_state
+  industrial_robot_client
+  simple_message
+  ${catkin_LIBRARIES})
+set_target_properties(${PROJECT_NAME}_weld_state
+  PROPERTIES OUTPUT_NAME weld_state
+  PREFIX "")
+target_compile_definitions(
+  ${PROJECT_NAME}_weld_state
+  PRIVATE
+  ${industrial_robot_client_DEFINITIONS})
+add_dependencies(${PROJECT_NAME}_weld_state ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
+
+
+# byte-swapping Fanuc specific weld state node
+add_executable(${PROJECT_NAME}_weld_state_bswap
+  src/fanuc_weld_state_node.cpp)
+target_link_libraries(${PROJECT_NAME}_weld_state_bswap
+  industrial_robot_client_bswap
+  simple_message_bswap
+  ${catkin_LIBRARIES})
+set_target_properties(${PROJECT_NAME}_weld_state_bswap
+  PROPERTIES OUTPUT_NAME weld_state_bswap
+  PREFIX "")
+target_compile_definitions(
+  ${PROJECT_NAME}_weld_state_bswap
+  PRIVATE
+  ${industrial_robot_client_bswap_DEFINITIONS})
+add_dependencies(${PROJECT_NAME}_weld_state_bswap ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
+
+
 # non-swapping Fanuc specific motion streaming interface
 add_executable(${PROJECT_NAME}_motion_streaming_interface
   src/fanuc_joint_streamer_node.cpp
@@ -92,6 +144,8 @@ if (CATKIN_ENABLE_TESTING)
   set(rl_test_deps
     ${PROJECT_NAME}_robot_state
     ${PROJECT_NAME}_robot_state_bswap
+    ${PROJECT_NAME}_weld_state
+    ${PROJECT_NAME}_weld_state_bswap
     ${PROJECT_NAME}_motion_streaming_interface
     ${PROJECT_NAME}_motion_streaming_interface_bswap)
 
@@ -111,6 +165,9 @@ install(TARGETS
 
   ${PROJECT_NAME}_robot_state
   ${PROJECT_NAME}_robot_state_bswap
+
+  ${PROJECT_NAME}_weld_state
+  ${PROJECT_NAME}_weld_state_bswap
 
   DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
 )

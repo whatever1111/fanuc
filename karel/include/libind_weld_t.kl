@@ -1,0 +1,96 @@
+PROGRAM libind_weld_t
+--------------------------------------------------------------------------------
+--
+-- Software License Agreement (BSD License)
+--
+-- Copyright (c) 2024, YOUR_NAME
+-- All rights reserved.
+--
+-- Redistribution and use in source and binary forms, with or without
+-- modification, are permitted provided that the following conditions
+-- are met:
+--
+--  * Redistributions of source code must retain the above copyright
+--    notice, this list of conditions and the following disclaimer.
+--  * Redistributions in binary form must reproduce the above
+--    copyright notice, this list of conditions and the following
+--    disclaimer in the documentation and/or other materials provided
+--    with the distribution.
+--  * Neither the name of the YOUR_NAME nor the names of its
+--    contributors may be used to endorse or promote products derived
+--    from this software without specific prior written permission.
+--
+-- THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+-- "AS IS" AND ANY EXPRESS OR
+-- IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
+-- WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+-- ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR
+-- CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
+-- EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
+-- PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+-- PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
+-- LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+-- NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+-- SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+--
+--------------------------------------------------------------------------------
+%NOLOCKGROUP
+%NOPAUSE = ERROR + COMMAND + TPENABLE
+%COMMENT = 'Welding types'
+
+--------------------------------------------------------------------------------
+--
+-- remote types & constants
+--
+--------------------------------------------------------------------------------
+%INCLUDE libind_hdr_t
+
+
+--------------------------------------------------------------------------------
+--
+-- local types & constants
+--
+--------------------------------------------------------------------------------
+CONST
+	-- ROS-I Message Types (NOTE: value '15' is a placeholder.
+	-- It should be checked against other defined types in your project
+	-- to ensure it is unique).
+	RI_MT_WELDST =   15  -- Message Type for Welding State
+
+	-- Welding I/O Mapping based on EWM BUSINT X11 Manual (Profile for Multimatrix)
+	-- These are EXAMPLE Fanuc Register numbers. You MUST configure the mapping
+	-- between the EWM Fieldbus data and these Fanuc Registers in the robot controller's
+	-- I/O configuration (e.g., for Profinet or Ethernet/IP).
+
+	-- We recommend mapping the EWM's first input WORD (containing status bits and error code)
+	-- to a single Fanuc Register. The bits are extracted inside the KAREL program.
+	WELD_R_STATUS_WORD = 10  -- Example: Map EWM Input Word 0 to Fanuc R[10]
+
+	-- We recommend mapping the analog value words to subsequent Fanuc Registers.
+	-- These will be sent as raw integers to ROS for scaling.
+	WELD_R_ACT_VOLT    = 12  -- Example: Map EWM Input Word 3 (GI_RealVoltage) to Fanuc R[12]
+	WELD_R_ACT_CURR    = 13  -- Example: Map EWM Input Word 4 (GI_RealCurrent) to Fanuc R[13]
+	WELD_R_ACT_WIRE    = 14  -- Example: Map EWM Input Word 5 (GI_RealWireSpeed) to Fanuc R[14]
+
+
+TYPE
+	weld_state_t = STRUCTURE
+		arc_ok         : BOOLEAN  -- I>0, Arc established (from Bit 0 of status word)
+		ready          : BOOLEAN  -- Welder is ready (from Bit 1 of status word)
+		stick_err      : BOOLEAN  -- Wire stick error (from Bit 2 of status word)
+		general_err    : BOOLEAN  -- General error active (from Bit 3 of status word)
+		err_code       : INTEGER  -- Fault code (from Bits 8-15 of status word)
+		act_voltage    : INTEGER  -- Raw value. Scale on ROS side: val * 100.0 / 32767.0
+		act_current    : INTEGER  -- Raw value. Scale on ROS side: val * 1000.0 / 32767.0
+		act_wire_spd   : INTEGER  -- Raw value. Scale on ROS side: val * 40.0 / 32767.0
+	ENDSTRUCTURE
+
+
+	ind_weld_t = STRUCTURE     -- Simplified packet structure for welding
+		hdr_         : ind_hdr_t
+		weld_data_   : weld_state_t
+	ENDSTRUCTURE
+
+
+BEGIN
+END libind_weld_t 
