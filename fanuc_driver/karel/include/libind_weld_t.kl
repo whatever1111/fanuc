@@ -1,4 +1,3 @@
-PROGRAM libind_weld_t
 --------------------------------------------------------------------------------
 --
 -- Software License Agreement (BSD License)
@@ -34,63 +33,34 @@ PROGRAM libind_weld_t
 -- SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 --
 --------------------------------------------------------------------------------
-%NOLOCKGROUP
-%NOPAUSE = ERROR + COMMAND + TPENABLE
-%COMMENT = 'Welding types'
-
---------------------------------------------------------------------------------
---
--- remote types & constants
---
---------------------------------------------------------------------------------
-%INCLUDE libind_hdr_t
-
 
 --------------------------------------------------------------------------------
 --
 -- local types & constants
 --
 --------------------------------------------------------------------------------
+
+-- Welding message type constant
 CONST
-	-- ROS-I Message Types (NOTE: value '15' is a placeholder.
-	-- It should be checked against other defined types in your project
-	-- to ensure it is unique).
-	RI_MT_WELDST =   15  -- Message Type for Welding State
-
-	-- Welding I/O Mapping based on EWM BUSINT X11 Manual (Profile for Multimatrix)
-	-- These are EXAMPLE Fanuc Register numbers. You MUST configure the mapping
-	-- between the EWM Fieldbus data and these Fanuc Registers in the robot controller's
-	-- I/O configuration (e.g., for Profinet or Ethernet/IP).
-
-	-- We recommend mapping the EWM's first input WORD (containing status bits and error code)
-	-- to a single Fanuc Register. The bits are extracted inside the KAREL program.
-	WELD_R_STATUS_WORD = 10  -- Example: Map EWM Input Word 0 to Fanuc R[10]
-
-	-- We recommend mapping the analog value words to subsequent Fanuc Registers.
-	-- These will be sent as raw integers to ROS for scaling.
-	WELD_R_ACT_VOLT    = 12  -- Example: Map EWM Input Word 3 (GI_RealVoltage) to Fanuc R[12]
-	WELD_R_ACT_CURR    = 13  -- Example: Map EWM Input Word 4 (GI_RealCurrent) to Fanuc R[13]
-	WELD_R_ACT_WIRE    = 14  -- Example: Map EWM Input Word 5 (GI_RealWireSpeed) to Fanuc R[14]
+	RI_MT_WELDST = 15  -- Welding state message type
 
 
+-- Welding state structure
 TYPE
 	weld_state_t = STRUCTURE
 		arc_ok         : BOOLEAN  -- I>0, Arc established (from Bit 0 of status word)
 		ready          : BOOLEAN  -- Welder is ready (from Bit 1 of status word)
-		stick_err      : BOOLEAN  -- Wire stick error (from Bit 2 of status word)
-		general_err    : BOOLEAN  -- General error active (from Bit 3 of status word)
-		err_code       : INTEGER  -- Fault code (from Bits 8-15 of status word)
-		act_voltage    : INTEGER  -- Raw value. Scale on ROS side: val * 100.0 / 32767.0
-		act_current    : INTEGER  -- Raw value. Scale on ROS side: val * 1000.0 / 32767.0
-		act_wire_spd   : INTEGER  -- Raw value. Scale on ROS side: val * 40.0 / 32767.0
+		stick_err      : BOOLEAN  -- Wire stick error (from Bit 2 of status word)  
+		general_err    : BOOLEAN  -- General error (from Bit 3 of status word)
+		err_code       : INTEGER  -- Error code (from Bits 8-15 of status word)
+		act_voltage    : INTEGER  -- Actual voltage (raw ADC value)
+		act_current    : INTEGER  -- Actual current (raw ADC value)
+		act_wire_spd   : INTEGER  -- Actual wire speed (raw ADC value)
 	ENDSTRUCTURE
 
-
-	ind_weld_t = STRUCTURE     -- Simplified packet structure for welding
-		hdr_         : ind_hdr_t
-		weld_data_   : weld_state_t
-	ENDSTRUCTURE
-
-
-BEGIN
-END libind_weld_t 
+-- Complete welding packet structure
+TYPE
+	ind_weld_t = STRUCTURE
+		hdr_       : ind_hdr_t       -- Common header
+		weld_data_ : weld_state_t    -- Welding state data
+	ENDSTRUCTURE 
