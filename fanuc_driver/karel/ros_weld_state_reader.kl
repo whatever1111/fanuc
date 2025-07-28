@@ -31,24 +31,27 @@
 -- POSSIBILITY OF SUCH DAMAGE.
 
 
-PROGRAM ros_weld_state
+PROGRAM ros_weld_state_reader
 --------------------------------------------------------------------------------
 -- 
--- ROS-Industrial welding state and control proxy.
+-- ROS-Industrial welding state reader.
 -- 
--- This program reads welding parameters from GI/DI, sends them to ROS,
--- receives commands from ROS, and writes them to GO/DO.
--- It implements a bidirectional communication based on EWM welder manual.
---
--- Configuration:
---   - Welding TCP port 11002
---   - Server TAG 4
+-- This program reads welding parameters from GI/DI and sends them to ROS.
+-- Based on the stable ros_state.kl architecture - ONLY SENDS, NO RECEIVING.
+-- 
+-- Assumptions:
+--   - User Socket Messaging (USM) is supported by robot
+--   - EWM welding power source connected via fieldbus
+-- 
+-- Configuration defaults:
+--   - TAG 'S4' used for USM  
+--   - Welding state TCP port 11002
 -- 
 -- author: YOUR_NAME
 -- 
 --------------------------------------------------------------------------------
 %ALPHABETIZE
-%COMMENT = 'rwctrl'
+%COMMENT = 'rwreader'
 %NOBUSYLAMP
 %NOLOCKGROUP
 %NOPAUSE = COMMAND + TPENABLE + ERROR
@@ -79,39 +82,27 @@ TYPE
 		s_tag_nr     : INTEGER  -- server TAG number to use
 		um_clear     : BOOLEAN  -- clear user menu on start
 		-- Welding I/O mappings
-		status_gi    : INTEGER  -- GI for status word
 		volt_gi      : INTEGER  -- GI for actual voltage
 		curr_gi      : INTEGER  -- GI for actual current
-		wire_gi      : INTEGER  -- GI for actual wire speed
-		wire_go      : INTEGER  -- GO for target wire speed
-	ENDSTRUCTURE
-
-	ind_weld_cmd_data_t = STRUCTURE
-		target_wire_spd : INTEGER
-	ENDSTRUCTURE
-
-	ind_weld_cmd_t = STRUCTURE
-		hdr_            : ind_hdr_t
-		weld_cmd_data_  : ind_weld_cmd_data_t
+		arc_di       : INTEGER  -- DI for arc detection
+		power_err_di : INTEGER  -- DI for power error
+		depos_di     : INTEGER  -- DI for deposition detection
 	ENDSTRUCTURE
 
 
 VAR
 	cfg_           IN SHADOW : weld_cfg_t -- configuration
 	weld_pkt_out_            : ind_weld_t -- ROS-Industrial welding state packet
-	weld_cmd_in_             : ind_weld_cmd_t -- ROS-Industrial welding command packet
 	sock_                    : ssock_t    -- server socket instance
 	sock_fd_                 : FILE       -- file descriptor associated with server socket
 	stat_                    : INTEGER    -- status variable
 	sleep_time_              : INTEGER
 	shutdwn_req_             : BOOLEAN    -- program abort requested status
-	bool_as_int_             : INTEGER    -- Helper for logging booleans
-	tmp_int_                 : INTEGER    -- Helper for I/O operations
 
 
 CONST
 	-- 
-	LOG_PFIX     = 'RWCTRL '
+	LOG_PFIX     = 'RWREAD '
 
 	COND_AH      =    1  -- ABORT handler id
 
@@ -121,21 +112,18 @@ CONST
 	HOST_CTAG_ER = 67144 -- HOST-144 Comm Tag error
 	FILE_ILL_PRM =  2032 -- FILE-032 Illegal parameter
 	SEV_ABORT    =    2  -- ABORT severity
-	
-	RI_RT_INVALID = 0    -- Invalid reply type
-	RI_MT_WELDCMD = 14   -- Weld Command message type (user defined)
 
 	-- Configuration defaults
-	WELD_TAG     =    4  -- Server tag (different from main state proxy)
-	WELD_TCP_P   = 11002 -- TCP port (different from main state proxy)
+	WELD_TAG     =    3  -- Server tag
+	WELD_TCP_P   = 11002 -- TCP port for welding state
 	LOOP_HZ      =   10  -- Main loop freq (Hz)
 	
-	-- Default I/O mappings (EWM welder specific)
-	DEF_STATUS_GI = 1   -- GI[1] for status word (DI 1-8, ErrCode)
-	DEF_VOLT_GI   = 4   -- GI[4] for actual voltage
-	DEF_CURR_GI   = 5   -- GI[5] for actual current
-	DEF_WIRE_GI   = 6   -- GI[6] for actual wire speed
-	DEF_WIRE_GO   = 4   -- GO[4] for target wire speed
+	-- I/O mappings (user defined)
+	DEF_VOLT_GI      = 2   -- GI[2] for actual voltage
+	DEF_CURR_GI      = 3   -- GI[3] for actual current
+	DEF_ARC_DI       = 249 -- DI[249] for arc detection
+	DEF_POWER_ERR_DI = 252 -- DI[252] for power error
+	DEF_DEPOS_DI     = 251 -- DI[251] for deposition detection
 
 
 --------------------------------------------------------------------------------
@@ -154,13 +142,10 @@ CONST
 -- local routine prototypes
 -- 
 --------------------------------------------------------------------------------
-ROUTINE check_weld_cfg_(cfg : weld_cfg_t) : INTEGER FROM ros_weld_state
-ROUTINE install_ah_ FROM ros_weld_state
-ROUTINE remove_ah_ FROM ros_weld_state
-ROUTINE iwd_srlise(pkt : ind_weld_t; fdesc : FILE) : INTEGER FROM ros_weld_state
-ROUTINE iwd_dslice_cmd(pkt : ind_weld_cmd_t; fdesc : FILE) : INTEGER FROM ros_weld_state
-ROUTINE read_weld_state_(weld_pkt : ind_weld_t) FROM ros_weld_state
-ROUTINE apply_weld_cmd_(cmd : ind_weld_cmd_t) FROM ros_weld_state
+ROUTINE check_cfg_(cfg : weld_cfg_t) : INTEGER FROM ros_weld_state_reader
+ROUTINE install_ah_ FROM ros_weld_state_reader
+ROUTINE remove_ah_ FROM ros_weld_state_reader
+ROUTINE iwd_srlise(pkt : ind_weld_t; fdesc : FILE) : INTEGER FROM ros_weld_state_reader
 
 
 --------------------------------------------------------------------------------
@@ -170,7 +155,7 @@ ROUTINE apply_weld_cmd_(cmd : ind_weld_cmd_t) FROM ros_weld_state
 --------------------------------------------------------------------------------
 BEGIN
 	-- check config
-	stat_ = check_weld_cfg_(cfg_)
+	stat_ = check_cfg_(cfg_)
 	IF (stat_ <> CFG_OK) THEN
 		log_error_a(LOG_PFIX + 'cfg error:', stat_)
 		log_error(LOG_PFIX + 'check cfg')
@@ -191,23 +176,14 @@ BEGIN
 	-- enable log output
 	IF (cfg_.um_clear) THEN log_clear; ENDIF
 
-	-- init outgoing welding state packet
+	-- init welding state packet
 	USING weld_pkt_out_ DO
 		-- Header (16 bytes) + Payload (4 bools as ints, 4 ints -> 32 bytes) = 48 bytes total
 		hdr_.length_     = 48
 		hdr_.msg_type_   = RI_MT_WELDST
 		hdr_.comm_type_  = RI_CT_TOPIC
-		hdr_.reply_type_ = RI_RT_INVALID
+		hdr_.reply_type_ = 0
 		-- data is filled in the loop
-	ENDUSING
-	
-	-- init incoming welding command packet
-	USING weld_cmd_in_ DO
-		-- Header (16 bytes) + Payload (1 int -> 4 bytes) = 20 bytes total
-		hdr_.length_     = 20
-		hdr_.msg_type_   = RI_MT_WELDCMD
-		hdr_.comm_type_  = RI_CT_TOPIC
-		hdr_.reply_type_ = RI_RT_INVALID
 	ENDUSING
 
 	-- init server socket
@@ -230,7 +206,7 @@ BEGIN
 	WHILE (NOT shutdwn_req_) DO
 
 		-- inform user
-		log_info(LOG_PFIX + 'Waiting for ROS client')
+		log_info(LOG_PFIX + 'Waiting for ROS weld state reader')
 
 		-- set socket in 'binary mode' (unformatted)
 		-- KAREL Reference Manual, MARRC75KR07091E Rev C, sec 7.3.1
@@ -240,39 +216,55 @@ BEGIN
 		stat_ = ssock_accpt2(sock_, sock_fd_)
 		IF (stat_ <> 0) THEN
 			log_error_a(LOG_PFIX + 'sock_accept err:', stat_)
-			-- can't continue, loop and wait again
-			GOTO exit_inner
+			-- can't continue
+			GOTO exit_discon
 		ENDIF
 
 		-- inform user
-		log_info(LOG_PFIX + 'Connected to ROS client')
+		log_info(LOG_PFIX + 'Connected')
 
-		-- got client, start state/command relay loop
+		-- got client, start welding state transmission loop
 		WHILE (NOT shutdwn_req_) DO
 
-			-- 1. read welding state from I/O
-			read_weld_state_(weld_pkt_out_)
+			-- Read I/O and build welding state packet
+			USING weld_pkt_out_.weld_data_ DO
+				-- Read analog values from Group Inputs
+				act_voltage = GIN[cfg_.volt_gi]   -- GI[2] Raw voltage value
+				act_current = GIN[cfg_.curr_gi]   -- GI[3] Raw current value
+				
+				-- Read digital inputs for boolean states
+				-- Use simple true/false logic for now
+				arc_ok = DIN[cfg_.arc_di]           -- DI[249] Arc detection
+				ready = TRUE                        -- Assume ready for testing
+				stick_err = FALSE                   -- No stick error for testing
+				general_err = DIN[cfg_.power_err_di] -- DI[252] Power error
+				
+				-- Set error code based on deposition detection
+				IF DIN[cfg_.depos_di] THEN          -- DI[251] Deposition detection
+					err_code = 0                    -- Normal deposition
+				ELSE
+					err_code = 1                    -- No deposition detected
+				ENDIF
+				
+				-- Set wire speed to a default value (not used in new mapping)
+				act_wire_spd = 0
+				
+				-- Debug logging removed to prevent build issues
+			ENDUSING
 
-			-- 2. serialise welding state packet, write to socket
+			-- serialise welding state packet, write to socket
 			stat_ = iwd_srlise(weld_pkt_out_, sock_fd_)
+
+			-- check result
 			IF (stat_ <> 0) THEN
 				log_error_a(LOG_PFIX + 'weld_srlise err:', stat_)
-				-- remote probably disconnected, exit inner loop
-				GOTO exit_discon
-			ENDIF
-			
-			-- 3. deserialize command packet from socket
-			stat_ = iwd_dslice_cmd(weld_cmd_in_, sock_fd_)
-			IF (stat_ <> 0) THEN
-				log_error_a(LOG_PFIX + 'weld_dslice err:', stat_)
-				-- remote probably disconnected, exit inner loop
-				GOTO exit_discon
+				-- remote probably disconnected
+				stat_ = ssock_dconn2(sock_, sock_fd_)
+				-- exit inner loop
+				GOTO exit_inner
 			ENDIF
 
-			-- 4. apply command to welder I/O
-			apply_weld_cmd_(weld_cmd_in_)
-
-			-- 5. sleep a little (1/T)
+			-- sleep a little (1/T)
 			DELAY sleep_time_
 
 		-- inner WHILE loop
@@ -301,7 +293,7 @@ exit_on_err::
 	-- done
 	log_info(LOG_PFIX + 'Exit')
 
-END ros_weld_state
+END ros_weld_state_reader
 
 
 --------------------------------------------------------------------------------
@@ -309,7 +301,7 @@ END ros_weld_state
 -- Check and validate welding configuration
 -- 
 --------------------------------------------------------------------------------
-ROUTINE check_weld_cfg_
+ROUTINE check_cfg_
 VAR
 	a__ : BOOLEAN
 BEGIN
@@ -321,108 +313,19 @@ BEGIN
 	IF (UNINIT(cfg.s_tag_nr )) THEN cfg.s_tag_nr  = WELD_TAG     ; a__ = TRUE; ENDIF
 	IF (UNINIT(cfg.um_clear )) THEN cfg.um_clear  = TRUE         ; a__ = TRUE; ENDIF
 	-- I/O mappings
-	IF (UNINIT(cfg.status_gi)) THEN cfg.status_gi = DEF_STATUS_GI; a__ = TRUE; ENDIF
-	IF (UNINIT(cfg.volt_gi  )) THEN cfg.volt_gi   = DEF_VOLT_GI  ; a__ = TRUE; ENDIF
-	IF (UNINIT(cfg.curr_gi  )) THEN cfg.curr_gi   = DEF_CURR_GI  ; a__ = TRUE; ENDIF
-	IF (UNINIT(cfg.wire_gi  )) THEN cfg.wire_gi   = DEF_WIRE_GI  ; a__ = TRUE; ENDIF
-	IF (UNINIT(cfg.wire_go  )) THEN cfg.wire_go   = DEF_WIRE_GO  ; a__ = TRUE; ENDIF
+	IF (UNINIT(cfg.volt_gi     )) THEN cfg.volt_gi      = DEF_VOLT_GI     ; a__ = TRUE; ENDIF
+	IF (UNINIT(cfg.curr_gi     )) THEN cfg.curr_gi      = DEF_CURR_GI     ; a__ = TRUE; ENDIF
+	IF (UNINIT(cfg.arc_di      )) THEN cfg.arc_di       = DEF_ARC_DI      ; a__ = TRUE; ENDIF
+	IF (UNINIT(cfg.power_err_di)) THEN cfg.power_err_di = DEF_POWER_ERR_DI; a__ = TRUE; ENDIF
+	IF (UNINIT(cfg.depos_di    )) THEN cfg.depos_di     = DEF_DEPOS_DI    ; a__ = TRUE; ENDIF
 	IF (UNINIT(cfg.checked  )) THEN cfg.checked   = FALSE        ; a__ = TRUE; ENDIF
-
 
 	-- make sure user has checked configuration
 	IF ((NOT cfg.checked) OR a__) THEN RETURN (CFG_NOTDONE); ENDIF
 
 	-- all ok
 	RETURN (CFG_OK)
-END check_weld_cfg_
-
-
---------------------------------------------------------------------------------
--- 
--- Read welding state from Group Inputs (GI/DI)
--- 
---------------------------------------------------------------------------------
-ROUTINE read_weld_state_
-VAR
-	status_word : INTEGER
-BEGIN
-	-- Read status word from configured Group Input
-	status_word = GIN[cfg_.status_gi]
-	
-	-- Log raw values for debugging
-	log_info_a(LOG_PFIX + 'Status GI val:', status_word)
-	tmp_int_ = GIN[cfg_.curr_gi]
-	log_info_a(LOG_PFIX + 'Curr GI val:', tmp_int_)
-
-	USING weld_pkt.weld_data_ DO
-		-- Unpack boolean flags from the status word using bitwise AND
-		-- Based on EWM manual, status word contains DI signals in lower bits
-		-- Bit 0: Arc Stability (I > 0)
-		IF ((status_word MOD 2) = 1) THEN
-			arc_ok = TRUE
-		ELSE
-			arc_ok = FALSE
-		ENDIF
-		-- Bit 1: Welder Ready
-		IF (((status_word DIV 2) MOD 2) = 1) THEN
-			ready = TRUE
-		ELSE
-			ready = FALSE
-		ENDIF
-		-- Bit 2: Wire Stick Error
-		IF (((status_word DIV 4) MOD 2) = 1) THEN
-			stick_err = TRUE
-		ELSE
-			stick_err = FALSE
-		ENDIF
-		-- Bit 3: General Error
-		IF (((status_word DIV 8) MOD 2) = 1) THEN
-			general_err = TRUE
-		ELSE
-			general_err = FALSE
-		ENDIF
-
-		-- Unpack the error code (bits 8-15 / byte 1) by shifting right
-		err_code      = (status_word DIV 256)
-
-		-- Read actual current from its mapped Group Input
-		act_current   = GIN[cfg_.curr_gi]
-		
-		-- Use FAKE values for other parameters as requested for initial testing
-		act_voltage   = 250     -- Fake value (represents 25.0V)
-		act_wire_spd  = 8192    -- Fake value (represents 10.0 m/min)
-		
-		-- Log parsed values for debugging
-		IF arc_ok THEN bool_as_int_ = 1; ELSE bool_as_int_ = 0; ENDIF
-		log_info_a(LOG_PFIX + 'Arc OK:', bool_as_int_)
-		IF ready THEN bool_as_int_ = 1; ELSE bool_as_int_ = 0; ENDIF
-		log_info_a(LOG_PFIX + 'Ready:', bool_as_int_)
-		IF stick_err THEN bool_as_int_ = 1; ELSE bool_as_int_ = 0; ENDIF
-		log_info_a(LOG_PFIX + 'Stick err:', bool_as_int_)
-		IF general_err THEN bool_as_int_ = 1; ELSE bool_as_int_ = 0; ENDIF
-		log_info_a(LOG_PFIX + 'General err:', bool_as_int_)
-		log_info_a(LOG_PFIX + 'Error code:', err_code)
-		log_info_a(LOG_PFIX + 'Actual current:', act_current)
-		log_info(LOG_PFIX + 'Sending FAKE voltage and wire speed')
-	ENDUSING
-
-END read_weld_state_
-
-
---------------------------------------------------------------------------------
---
--- Apply welding command to Group Outputs (GO)
---
---------------------------------------------------------------------------------
-ROUTINE apply_weld_cmd_
-BEGIN
-	-- Write target wire speed to configured Group Output
-	tmp_int_ = cmd.weld_cmd_data_.target_wire_spd
-	GOUT[cfg_.wire_go] = tmp_int_
-
-	-- Log for debugging
-	log_info_a(LOG_PFIX + 'Set Wire GO val:', tmp_int_)
-END apply_weld_cmd_
+END check_cfg_
 
 
 --------------------------------------------------------------------------------
@@ -435,6 +338,8 @@ VAR
 	bool_int  : INTEGER
 BEGIN
 	-- KAREL does not support writing STRUCTUREs directly. Must write field by field.
+
+	-- Write header fields
 	WRITE fdesc (pkt.hdr_.length_)
 	WRITE fdesc (pkt.hdr_.msg_type_)
 	WRITE fdesc (pkt.hdr_.comm_type_)
@@ -454,41 +359,9 @@ BEGIN
 	WRITE fdesc (pkt.weld_data_.act_voltage)
 	WRITE fdesc (pkt.weld_data_.act_current)
 	WRITE fdesc (pkt.weld_data_.act_wire_spd)
-	
-	-- check for write errors
-	IF IO_STATUS(fdesc) <> 0 THEN
-		log_error_a(LOG_PFIX + 'iwd_srlise IO_STATUS:', IO_STATUS(fdesc))
-		RETURN (IO_STATUS(fdesc))
-	ENDIF
 
 	RETURN (0)
 END iwd_srlise
-
-
---------------------------------------------------------------------------------
---
--- Deserialise ind_weld_cmd_t packet from file descriptor.
---
---------------------------------------------------------------------------------
-ROUTINE iwd_dslice_cmd
-BEGIN
-	-- KAREL does not support reading STRUCTUREs directly. Must read field by field.
-	READ fdesc (pkt.hdr_.length_)
-	READ fdesc (pkt.hdr_.msg_type_)
-	READ fdesc (pkt.hdr_.comm_type_)
-	READ fdesc (pkt.hdr_.reply_type_)
-	
-	-- Read weld_cmd_data_t payload
-	READ fdesc (pkt.weld_cmd_data_.target_wire_spd)
-	
-	-- check for read errors
-	IF IO_STATUS(fdesc) <> 0 THEN
-		log_error_a(LOG_PFIX + 'iwd_dslice IO_STATUS:', IO_STATUS(fdesc))
-		RETURN (IO_STATUS(fdesc))
-	ENDIF
-
-	RETURN (0)
-END iwd_dslice_cmd
 
 
 --------------------------------------------------------------------------------
