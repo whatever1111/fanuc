@@ -124,6 +124,7 @@ VAR
 	stat_                    : INTEGER        -- status variable
 	sleep_time_              : INTEGER
 	shutdwn_req_             : BOOLEAN        -- program abort requested status
+	idle_counter_            : INTEGER        -- Counter for idle timeout
 
 
 CONST
@@ -161,6 +162,8 @@ CONST
 	DEF_JOG_FEED_DO    = 257 -- DO[257] for jog wire feed
 	DEF_JOG_RETRACT_DO = 259 -- DO[259] for jog wire retract
 
+	RI_SEQ_HB = -110   -- heartbeat frame
+
 
 --------------------------------------------------------------------------------
 -- 
@@ -184,6 +187,7 @@ ROUTINE remove_ah_ FROM ros_weld_relay
 ROUTINE iwd_dslice_cmd(pkt : ind_weld_cmd_t; fdesc : FILE) : INTEGER FROM ros_weld_relay
 ROUTINE exec_weld_cmd_(cmd : ind_weld_cmd_t; cfg : weld_cfg_t) : INTEGER FROM ros_weld_relay
 ROUTINE req_next_(cmd_in : ind_weld_cmd_t; pkt_out : ind_pkt_t; fdesc : FILE) : INTEGER FROM ros_weld_relay
+ROUTINE iwd_srlise_reply(pkt : ind_pkt_t; fdesc : FILE) : INTEGER FROM ros_weld_relay
 
 
 --------------------------------------------------------------------------------
@@ -305,6 +309,7 @@ BEGIN
 
 		-- inform user
 		log_info(LOG_PFIX + 'Connected')
+		idle_counter_ = 0
 
 		-- got client, start welding command relay loop
 		WHILE (NOT shutdwn_req_) DO
@@ -324,28 +329,67 @@ BEGIN
 			IF (stat_ > 0) THEN
 				log_info(LOG_PFIX + 'Received welding command')
 
-				-- execute welding command
-				stat_ = exec_weld_cmd_(weld_cmd_in_, cfg_)
-				IF (stat_ <> 0) THEN
-					log_error_a(LOG_PFIX + 'exec_weld_cmd err:', stat_)
-					-- send error reply but continue
-					pkt_out_.reply_type_ = RI_RT_FAIL
-				ELSE
-					-- send success reply
+				-- check for heartbeat frame
+				IF (weld_cmd_in_.seq_nr_ = RI_SEQ_HB) THEN
+					log_info(LOG_PFIX + 'Received heartbeat frame')
+					-- reset idle timer & ACK
+					idle_counter_ = 0
 					pkt_out_.reply_type_ = RI_RT_SUCC
+					stat_ = req_next_(weld_cmd_in_, pkt_out_, sock_fd_)
+					IF (stat_ <> 0) THEN
+						log_error_a(LOG_PFIX + 'heartbeat reply err:', stat_)
+						GOTO exit_discon
+					ENDIF
+				ELSE
+					-- execute normal welding command
+					stat_ = exec_weld_cmd_(weld_cmd_in_, cfg_)
+					IF (stat_ <> 0) THEN
+						log_error_a(LOG_PFIX + 'exec_weld_cmd err:', stat_)
+						-- send error reply but continue
+						pkt_out_.reply_type_ = RI_RT_FAIL
+					ELSE
+						-- send success reply
+						pkt_out_.reply_type_ = RI_RT_SUCC
+					ENDIF
+
+					-- send reply
+					stat_ = req_next_(weld_cmd_in_, pkt_out_, sock_fd_)
+					IF (stat_ <> 0) THEN
+						-- can't continue
+						log_error_a(LOG_PFIX + 'req_next err:', stat_)
+						GOTO exit_discon
+					ENDIF
+
+					-- Reset idle counter upon successful processing of a command
+					idle_counter_ = 0
 				ENDIF
 
-				-- send reply
-				stat_ = req_next_(weld_cmd_in_, pkt_out_, sock_fd_)
-				IF (stat_ <> 0) THEN
-					-- can't continue
-					log_error_a(LOG_PFIX + 'req_next err:', stat_)
+				-- IMPORTANT: Clear the incoming command packet after processing
+				-- to prevent old data from being reused on the next loop iteration.
+				weld_cmd_in_.hdr_.length_ = 0
+				weld_cmd_in_.hdr_.msg_type_ = 0
+				weld_cmd_in_.seq_nr_ = 0
+				weld_cmd_in_.weld_cmd_data_.target_wire_spd = 0
+				weld_cmd_in_.weld_cmd_data_.correction_val = 0
+				weld_cmd_in_.weld_cmd_data_.dyn_setting = 0
+				weld_cmd_in_.weld_cmd_data_.operation_mode = 0
+				weld_cmd_in_.weld_cmd_data_.std_pulse_val = 0
+				weld_cmd_in_.weld_cmd_data_.program_number = 0
+				weld_cmd_in_.weld_cmd_data_.arc_start_cmd = 0
+				weld_cmd_in_.weld_cmd_data_.gas_control = 0
+				weld_cmd_in_.weld_cmd_data_.jog_feed_cmd = 0
+				weld_cmd_in_.weld_cmd_data_.jog_retract_cmd = 0
+
+			ELSE
+				-- No command received, increment idle counter
+				idle_counter_ = idle_counter_ + 1
+
+				-- If idle for too long (e.g. 10 seconds), assume client has disconnected
+				IF (idle_counter_ > (10 * cfg_.loop_hz)) THEN
+					log_error(LOG_PFIX + 'Idle timeout, assuming disconnect.')
 					GOTO exit_discon
 				ENDIF
 
-			ELSE
-				-- DEBUG: Log no packets waiting
-				log_info(LOG_PFIX + 'No packets waiting, sleeping...')
 				-- no packets waiting, sleep a little (1/T)
 				DELAY sleep_time_
 			ENDIF
@@ -425,11 +469,14 @@ VAR
 	stat_check : INTEGER
 BEGIN
 	-- DEBUG: Log function entry
-	log_info(LOG_PFIX + 'iwd_dslice_cmd: Checking for data')
+	log_info(LOG_PFIX + 'iwd_dslice_cmd: Entered')
 
 	-- Check if data is available without blocking  
 	-- Note: We need to read the full packet structure properly
 	BYTES_AHEAD(fdesc, bytes_avail, stat_check)
+	log_info_a(LOG_PFIX + 'BYTES_AHEAD avail:', bytes_avail)
+	log_info_a(LOG_PFIX + 'BYTES_AHEAD status:', stat_check)
+
 	-- Detect socket errors / disconnects
 	IF (stat_check <> 0) THEN
 		log_error_a(LOG_PFIX + 'BYTES_AHEAD err:', stat_check)
@@ -438,16 +485,23 @@ BEGIN
 
 	-- If remote side closed connection, BYTES_AHEAD may report 0 bytes repeatedly
 	IF (bytes_avail = 0) THEN
-		-- No data available (could be keep-alive timeout or idle connection)
+		-- No data is available right now. Return 0 and let the main loop's
+		-- idle timeout handle a potentially disconnected client.
 		RETURN (0)
 	ENDIF
 
-	-- DEBUG: Log bytes available
-	log_info_a(LOG_PFIX + 'Bytes available:', bytes_avail)
-	
+	-- Check for enough data for a full packet.
 	IF (bytes_avail < (RI_SZ_HDR + 4 + 40)) THEN -- header + seq_nr + payload (10 fields * 4 bytes)
-		log_info(LOG_PFIX + 'Not enough data for complete packet')
+		log_info(LOG_PFIX + 'Not enough data for a full packet, waiting...')
 		RETURN (0) -- No complete packet available
+	ENDIF
+	
+	-- From here, we assume a full packet should be available.
+	-- If not, the READs below will timeout or error, which is handled.
+	log_info_a(LOG_PFIX + 'Bytes available:', bytes_avail)
+
+	IF (bytes_avail < (RI_SZ_HDR + 4 + 40)) THEN -- header + seq_nr + payload (10 fields * 4 bytes)
+		log_warn_a(LOG_PFIX + 'Partial packet? Avail < 60:', bytes_avail)
 	ENDIF
 
 	-- DEBUG: Log packet reading start
@@ -483,7 +537,7 @@ BEGIN
 	-- check for read errors
 	IF IO_STATUS(fdesc) <> 0 THEN
 		log_error_a(LOG_PFIX + 'iwd_dslice IO_STATUS:', IO_STATUS(fdesc))
-		RETURN (IO_STATUS(fdesc))
+		RETURN (-IO_STATUS(fdesc)) -- Return NEGATIVE value on IO error
 	ENDIF
 
 	-- DEBUG: Log successful packet read
@@ -532,73 +586,83 @@ BEGIN
 	jog_feed       = cmd.weld_cmd_data_.jog_feed_cmd
 	jog_retract    = cmd.weld_cmd_data_.jog_retract_cmd
 
-	-- Log the received command values
-	log_info_a(LOG_PFIX + 'Recv wire speed:', wire_speed)
+	-- Log all received command values for debugging
+	log_info(LOG_PFIX + '--- Executing Command ---')
+	log_info_a(LOG_PFIX + 'Recv prog_num:', program_num)
+	log_info_a(LOG_PFIX + 'Recv wire_speed:', wire_speed)
 	log_info_a(LOG_PFIX + 'Recv correction:', correction)
-	log_info_a(LOG_PFIX + 'Recv op mode:', operation_mode)
-	log_info_a(LOG_PFIX + 'Recv prog num:', program_num)
+	log_info_a(LOG_PFIX + 'Recv dyn_setting:', dyn_setting)
+	log_info_a(LOG_PFIX + 'Recv op_mode:', operation_mode)
+	log_info_a(LOG_PFIX + 'Recv std_pulse:', std_pulse)
+	log_info_a(LOG_PFIX + 'Recv arc_start:', arc_start)
+	log_info_a(LOG_PFIX + 'Recv gas_ctrl:', gas_ctrl)
+	log_info_a(LOG_PFIX + 'Recv jog_feed:', jog_feed)
+	log_info_a(LOG_PFIX + 'Recv jog_retract:', jog_retract)
 
 	-- Write to Group Outputs (GO) only if the value is not NO_CHANGE
 	IF program_num <> NO_CHANGE THEN
-		GOUT[cfg.prog_num_go]  = program_num    -- Program number
+		log_info_a(LOG_PFIX + 'Set GOUT prog_num:', program_num)
+		GOUT[cfg.prog_num_go]  = program_num
 	ENDIF
 	IF wire_speed <> NO_CHANGE THEN
-		GOUT[cfg.wire_go]      = wire_speed     -- Wire feed speed
+		log_info_a(LOG_PFIX + 'Set GOUT wire_speed:', wire_speed)
+		GOUT[cfg.wire_go]      = wire_speed
 	ENDIF
 	IF correction <> NO_CHANGE THEN
-		GOUT[cfg.correction_go]= correction     -- Correction value
+		log_info_a(LOG_PFIX + 'Set GOUT correction:', correction)
+		GOUT[cfg.correction_go]= correction
 	ENDIF
 	IF dyn_setting <> NO_CHANGE THEN
-		GOUT[cfg.dyn_go]       = dyn_setting    -- Dynamic setting
+		log_info_a(LOG_PFIX + 'Set GOUT dyn_setting:', dyn_setting)
+		GOUT[cfg.dyn_go]       = dyn_setting
 	ENDIF
 	IF operation_mode <> NO_CHANGE THEN
-		GOUT[cfg.mode_go]      = operation_mode -- Operation mode
+		log_info_a(LOG_PFIX + 'Set GOUT op_mode:', operation_mode)
+		GOUT[cfg.mode_go]      = operation_mode
 	ENDIF
 	IF std_pulse <> NO_CHANGE THEN
-		GOUT[cfg.std_pulse_go] = std_pulse      -- Std/Pulse setting
+		log_info_a(LOG_PFIX + 'Set GOUT std_pulse:', std_pulse)
+		GOUT[cfg.std_pulse_go] = std_pulse
 	ENDIF
 
 	-- Write to Digital Outputs (DO) only if the value is not NO_CHANGE
 	IF arc_start <> NO_CHANGE THEN
+		log_info_a(LOG_PFIX + 'Set DOUT arc_start:', arc_start)
 		IF (arc_start > 0) THEN
 			DOUT[cfg.arc_start_do] = TRUE
-			log_info(LOG_PFIX + 'Arc start ON')
 		ELSE
 			DOUT[cfg.arc_start_do] = FALSE
-			log_info(LOG_PFIX + 'Arc start OFF')
 		ENDIF
 	ENDIF
 
 	IF gas_ctrl <> NO_CHANGE THEN
+		log_info_a(LOG_PFIX + 'Set DOUT gas_ctrl:', gas_ctrl)
 		IF (gas_ctrl > 0) THEN
 			DOUT[cfg.gas_do] = TRUE
-			log_info(LOG_PFIX + 'Gas ON')
 		ELSE
 			DOUT[cfg.gas_do] = FALSE
-			log_info(LOG_PFIX + 'Gas OFF')
 		ENDIF
 	ENDIF
 
 	IF jog_feed <> NO_CHANGE THEN
+		log_info_a(LOG_PFIX + 'Set DOUT jog_feed:', jog_feed)
 		IF (jog_feed > 0) THEN
 			DOUT[cfg.jog_feed_do] = TRUE
-			log_info(LOG_PFIX + 'Jog feed ON')
 		ELSE
 			DOUT[cfg.jog_feed_do] = FALSE
-			log_info(LOG_PFIX + 'Jog feed OFF')
 		ENDIF
 	ENDIF
 
 	IF jog_retract <> NO_CHANGE THEN
+		log_info_a(LOG_PFIX + 'Set DOUT jog_retract:', jog_retract)
 		IF (jog_retract > 0) THEN
 			DOUT[cfg.jog_retract_do] = TRUE
-			log_info(LOG_PFIX + 'Jog retract ON')
 		ELSE
 			DOUT[cfg.jog_retract_do] = FALSE
-			log_info(LOG_PFIX + 'Jog retract OFF')
 		ENDIF
 	ENDIF
 
+	log_info(LOG_PFIX + '--- Command Execution Finished ---')
 	RETURN (0) -- Success
 END exec_weld_cmd_
 
@@ -614,7 +678,7 @@ BEGIN
 	pkt_out.seq_nr_ = cmd_in.seq_nr_
 
 	-- Serialize and send reply packet
-	stat_ = ipkt_srlise(pkt_out, fdesc)
+	stat_ = iwd_srlise_reply(pkt_out, fdesc)
 	IF (stat_ <> 0) THEN
 		log_error_a(LOG_PFIX + 'reply srlise err:', stat_)
 		RETURN (stat_)
@@ -622,6 +686,44 @@ BEGIN
 
 	RETURN (0)
 END req_next_
+
+
+--------------------------------------------------------------------------------
+-- 
+-- Serialize and send a simple acknowledgment reply packet.
+-- This function writes the header and sequence number.
+-- 
+--------------------------------------------------------------------------------
+ROUTINE iwd_srlise_reply
+VAR
+	stat__ : INTEGER
+BEGIN
+	stat__ = 0
+
+	-- Write header fields one-by-one to ensure correctness
+	WRITE fdesc (pkt.length_)
+	stat__ = IO_STATUS(fdesc)
+	IF stat__ <> 0 THEN RETURN (-stat__); ENDIF
+
+	WRITE fdesc (pkt.msg_type_)
+	stat__ = IO_STATUS(fdesc)
+	IF stat__ <> 0 THEN RETURN (-stat__); ENDIF
+
+	WRITE fdesc (pkt.comm_type_)
+	stat__ = IO_STATUS(fdesc)
+	IF stat__ <> 0 THEN RETURN (-stat__); ENDIF
+
+	WRITE fdesc (pkt.reply_type_)
+	stat__ = IO_STATUS(fdesc)
+	IF stat__ <> 0 THEN RETURN (-stat__); ENDIF
+
+	-- Write sequence number
+	WRITE fdesc (pkt.seq_nr_)
+	stat__ = IO_STATUS(fdesc)
+	IF stat__ <> 0 THEN RETURN (-stat__); ENDIF
+
+	RETURN (0)
+END iwd_srlise_reply
 
 
 --------------------------------------------------------------------------------

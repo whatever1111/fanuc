@@ -40,9 +40,18 @@ class WeldCommandTester:
         rospy.init_node('weld_command_tester', anonymous=True)
         self.cmd_pub = rospy.Publisher('/weld_command', WeldCommand, queue_size=1)
         
-        # Wait for publisher to be ready
-        rospy.sleep(1.0)
-        rospy.loginfo("Weld Command Tester initialized")
+        rospy.loginfo("Waiting for subscriber to connect to /weld_command...")
+        wait_start_time = rospy.Time.now()
+        
+        while self.cmd_pub.get_num_connections() == 0:
+            if rospy.is_shutdown():
+                sys.exit(-1)
+            if rospy.Time.now() - wait_start_time > rospy.Duration(10.0):
+                rospy.logerr("Timeout waiting for subscriber. Is the fanuc_weld_command_node running?")
+                sys.exit(-1)
+            rospy.sleep(0.1)
+
+        rospy.loginfo("Subscriber connected! Weld Command Tester initialized.")
     
     def send_command(self, **kwargs):
         """Send a welding command with specified parameters"""
@@ -51,18 +60,30 @@ class WeldCommandTester:
         cmd.header.stamp = rospy.Time.now()
         cmd.header.frame_id = "weld_command"
         
-        # Set values from arguments, defaulting to the current message value (0) if not provided
-        cmd.target_wire_spd = kwargs.get('wire_speed', cmd.target_wire_spd)
-        cmd.correction_val = kwargs.get('correction', cmd.correction_val)
-        cmd.dyn_setting = kwargs.get('dynamic', cmd.dyn_setting)
-        cmd.operation_mode = kwargs.get('mode', cmd.operation_mode)
-        cmd.std_pulse_val = kwargs.get('std_pulse', cmd.std_pulse_val)
-        cmd.program_number = kwargs.get('program', cmd.program_number)
+        # Default all values to -1 (NO_CHANGE sentinel)
+        cmd.target_wire_spd = -1
+        cmd.correction_val = -1
+        cmd.dyn_setting = -1
+        cmd.operation_mode = -1
+        cmd.std_pulse_val = -1
+        cmd.program_number = -1
+        cmd.arc_start_cmd = -1
+        cmd.gas_control = -1
+        cmd.jog_feed_cmd = -1
+        cmd.jog_retract_cmd = -1
+
+        # Set values from arguments, overwriting the -1 default if provided
+        if 'wire_speed' in kwargs: cmd.target_wire_spd = kwargs['wire_speed']
+        if 'correction' in kwargs: cmd.correction_val = kwargs['correction']
+        if 'dynamic' in kwargs: cmd.dyn_setting = kwargs['dynamic']
+        if 'mode' in kwargs: cmd.operation_mode = kwargs['mode']
+        if 'std_pulse' in kwargs: cmd.std_pulse_val = kwargs['std_pulse']
+        if 'program' in kwargs: cmd.program_number = kwargs['program']
         
-        cmd.arc_start_cmd = kwargs.get('arc_start', cmd.arc_start_cmd)
-        cmd.gas_control = kwargs.get('gas', cmd.gas_control)
-        cmd.jog_feed_cmd = kwargs.get('jog_feed', cmd.jog_feed_cmd)
-        cmd.jog_retract_cmd = kwargs.get('jog_retract', cmd.jog_retract_cmd)
+        if 'arc_start' in kwargs: cmd.arc_start_cmd = kwargs['arc_start']
+        if 'gas' in kwargs: cmd.gas_control = kwargs['gas']
+        if 'jog_feed' in kwargs: cmd.jog_feed_cmd = kwargs['jog_feed']
+        if 'jog_retract' in kwargs: cmd.jog_retract_cmd = kwargs['jog_retract']
         
         # Log the command
         rospy.loginfo("Sending welding command:")
@@ -169,27 +190,30 @@ class WeldCommandTester:
             params = {}
             def get_int(prompt, default=None):
                 val_str = input(prompt)
-                if val_str == '' and default is not None:
-                    return default
+                if val_str == '':
+                    return None  # Return None if user skips
                 try:
                     return int(val_str)
                 except (ValueError, TypeError):
-                    return default
+                    return None
 
-            params['wire_speed'] = get_int("Wire Speed (0-100): ", 0)
-            params['correction'] = get_int("Correction (-999 to +999): ", 0)
-            params['dynamic'] = get_int("Dynamic (0-100): ", 0)
-            params['mode'] = get_int("Operation Mode (0=Std, 1=Pulse): ", 0)
-            params['std_pulse'] = get_int("Std/Pulse Value (0-100): ", 0)
-            params['program'] = get_int("Program Number (1-99): ", 0)
+            params['wire_speed'] = get_int("Wire Speed (0-100): ")
+            params['correction'] = get_int("Correction (-999 to +999): ")
+            params['dynamic'] = get_int("Dynamic (0-100): ")
+            params['mode'] = get_int("Operation Mode (0=Std, 1=Pulse): ")
+            params['std_pulse'] = get_int("Std/Pulse Value (0-100): ")
+            params['program'] = get_int("Program Number (1-99): ")
             
             print("\nDigital Outputs (0=OFF, 1=ON):")
-            params['arc_start'] = get_int("Arc Start (DO[253]): ", 0)
-            params['gas'] = get_int("Gas Control (DO[255]): ", 0)
-            params['jog_feed'] = get_int("Jog Feed (DO[257]): ", 0)
-            params['jog_retract'] = get_int("Jog Retract (DO[259]): ", 0)
+            params['arc_start'] = get_int("Arc Start (DO[253]): ")
+            params['gas'] = get_int("Gas Control (DO[255]): ")
+            params['jog_feed'] = get_int("Jog Feed (DO[257]): ")
+            params['jog_retract'] = get_int("Jog Retract (DO[259]): ")
             
-            self.send_command(**params)
+            # Filter out None values so they don't overwrite defaults in send_command
+            final_params = {k: v for k, v in params.items() if v is not None}
+            
+            self.send_command(**final_params)
             
         except ValueError:
             print("Invalid input! Please enter numbers only.")
@@ -203,25 +227,25 @@ def main():
     )
     
     # Group Output parameters
-    parser.add_argument('--wire_speed', type=int, help='Wire feed speed (GO[3])')
-    parser.add_argument('--correction', type=int, help='Correction value (GO[4])')
-    parser.add_argument('--dynamic', type=int, help='Dynamic setting (GO[5])')
-    parser.add_argument('--mode', type=int, help='Operation mode (GO[6]): 0=Standard, 1=Pulse')
-    parser.add_argument('--std_pulse', type=int, help='Standard/Pulse value (GO[7])')
-    parser.add_argument('--program', type=int, help='Program number (GO[2])')
+    parser.add_argument('--wire_speed', type=int, help='Wire feed speed (GO[3])', dest='wire_speed')
+    parser.add_argument('--correction', type=int, help='Correction value (GO[4])', dest='correction')
+    parser.add_argument('--dynamic', type=int, help='Dynamic setting (GO[5])', dest='dynamic')
+    parser.add_argument('--mode', type=int, help='Operation mode (GO[6]): 0=Standard, 1=Pulse', dest='mode')
+    parser.add_argument('--std_pulse', type=int, help='Standard/Pulse value (GO[7])', dest='std_pulse')
+    parser.add_argument('--program', type=int, help='Program number (GO[2])', dest='program')
     
     # Digital Output parameters (On/Off pairs)
-    parser.add_argument('--arc_start', action='store_true', help='Turn ON arc start (DO[253])')
-    parser.add_argument('--arc_stop', action='store_true', help='Turn OFF arc start (DO[253])')
+    parser.add_argument('--arc_start', action='store_const', const=1, dest='arc_start', help='Turn ON arc start (DO[253])')
+    parser.add_argument('--arc_stop', action='store_const', const=0, dest='arc_start', help='Turn OFF arc start (DO[253])')
     
-    parser.add_argument('--gas_on', action='store_true', help='Turn ON gas (DO[255])')
-    parser.add_argument('--gas_off', action='store_true', help='Turn OFF gas (DO[255])')
+    parser.add_argument('--gas_on', action='store_const', const=1, dest='gas', help='Turn ON gas (DO[255])')
+    parser.add_argument('--gas_off', action='store_const', const=0, dest='gas', help='Turn OFF gas (DO[255])')
 
-    parser.add_argument('--jog_feed_on', action='store_true', help='Turn ON jog wire feed (DO[257])')
-    parser.add_argument('--jog_feed_off', action='store_true', help='Turn OFF jog wire feed (DO[257])')
+    parser.add_argument('--jog_feed_on', action='store_const', const=1, dest='jog_feed', help='Turn ON jog wire feed (DO[257])')
+    parser.add_argument('--jog_feed_off', action='store_const', const=0, dest='jog_feed', help='Turn OFF jog wire feed (DO[257])')
 
-    parser.add_argument('--jog_retract_on', action='store_true', help='Turn ON jog wire retract (DO[259])')
-    parser.add_argument('--jog_retract_off', action='store_true', help='Turn OFF jog wire retract (DO[259])')
+    parser.add_argument('--jog_retract_on', action='store_const', const=1, dest='jog_retract', help='Turn ON jog wire retract (DO[259])')
+    parser.add_argument('--jog_retract_off', action='store_const', const=0, dest='jog_retract', help='Turn OFF jog wire retract (DO[259])')
     
     # Modes
     parser.add_argument('--interactive', action='store_true',
@@ -244,26 +268,18 @@ def main():
             if args.std_pulse is not None: params['std_pulse'] = args.std_pulse
             if args.program is not None: params['program'] = args.program
 
-            if args.arc_start: params['arc_start'] = 1
-            if args.arc_stop: params['arc_start'] = 0
-
-            if args.gas_on: params['gas'] = 1
-            if args.gas_off: params['gas'] = 0
-
-            if args.jog_feed_on: params['jog_feed'] = 1
-            if args.jog_feed_off: params['jog_feed'] = 0
-
-            if args.jog_retract_on: params['jog_retract'] = 1
-            if args.jog_retract_off: params['jog_retract'] = 0
+            # Consolidate arc_start, gas, etc. from args
+            if args.arc_start is not None: params['arc_start'] = args.arc_start
+            if args.gas is not None: params['gas'] = args.gas
+            if args.jog_feed is not None: params['jog_feed'] = args.jog_feed
+            if args.jog_retract is not None: params['jog_retract'] = args.jog_retract
             
-            if not params and not any([
-                args.arc_start, args.arc_stop, args.gas_on, args.gas_off,
-                args.jog_feed_on, args.jog_feed_off, args.jog_retract_on, args.jog_retract_off
-            ]):
+            if not params:
                 parser.print_help()
                 rospy.logwarn("No command specified. Use --interactive or provide command arguments.")
                 return
 
+            rospy.loginfo("Command-line args parsed. Parameters to send: %s", params)
             tester.send_command(**params)
         
     except rospy.ROSInterruptException:

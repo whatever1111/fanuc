@@ -44,7 +44,8 @@
 class FanucWeldCommandNode
 {
 private:
-    ros::NodeHandle nh_;
+    ros::NodeHandle nh_; // Private nodehandle for parameters
+    ros::NodeHandle public_nh_; // Public nodehandle for topics
     ros::Subscriber command_sub_;
     
     std::string robot_ip_;
@@ -80,22 +81,28 @@ private:
     static const uint32_t RI_CT_SVCREQ = 1;   // Service Request
     static const uint32_t RI_RT_INVAL = 0;    // Invalid reply type for requests
     static const int32_t NO_CHANGE = -1;      // Sentinel value for unchanged parameters
+    static const int32_t RI_SEQ_HB = -110;    // Heartbeat frame sequence number
     
     uint32_t sequence_number_;
+    ros::Timer heartbeat_timer_;
 
 public:
     FanucWeldCommandNode() : nh_("~"), sock_fd_(-1), connected_(false), sequence_number_(0)
     {
-        // Get parameters
+        // Get parameters from private namespace
         nh_.param<std::string>("robot_ip", robot_ip_, "127.0.0.1");
         nh_.param<int>("robot_port", robot_port_, 11002);
         
         ROS_INFO("Fanuc Weld Command Node starting");
         ROS_INFO("Target robot: %s:%d", robot_ip_.c_str(), robot_port_);
         
-        // Subscribe to weld command topic
-        command_sub_ = nh_.subscribe("/weld_command", 10, 
+        // Subscribe to weld command topic using the public nodehandle
+        command_sub_ = public_nh_.subscribe("/weld_command", 10, 
                                    &FanucWeldCommandNode::commandCallback, this);
+        
+        // Start heartbeat timer (every 3 seconds)
+        heartbeat_timer_ = public_nh_.createTimer(ros::Duration(3.0), 
+                                         &FanucWeldCommandNode::heartbeatCallback, this);
         
         ROS_INFO("Subscribed to /weld_command topic");
         ROS_INFO("Ready to send welding commands to robot");
@@ -154,8 +161,17 @@ public:
     
     void commandCallback(const fanuc_driver::WeldCommand::ConstPtr& msg)
     {
-        ROS_INFO("Received weld command: wire_spd=%d, mode=%d, prog=%d", 
-                 msg->target_wire_spd, msg->operation_mode, msg->program_number);
+        ROS_INFO("--- Received WeldCommand ROS message ---");
+        ROS_INFO("  prog_number: %d", (int32_t)msg->program_number);
+        ROS_INFO("  target_wire_spd: %d", (int32_t)msg->target_wire_spd);
+        ROS_INFO("  correction_val: %d", (int32_t)msg->correction_val);
+        ROS_INFO("  dyn_setting: %d", (int32_t)msg->dyn_setting);
+        ROS_INFO("  operation_mode: %d", (int32_t)msg->operation_mode);
+        ROS_INFO("  std_pulse_val: %d", (int32_t)msg->std_pulse_val);
+        ROS_INFO("  arc_start_cmd: %d", (int32_t)msg->arc_start_cmd);
+        ROS_INFO("  gas_control: %d", (int32_t)msg->gas_control);
+        ROS_INFO("  jog_feed_cmd: %d", (int32_t)msg->jog_feed_cmd);
+        ROS_INFO("  jog_retract_cmd: %d", (int32_t)msg->jog_retract_cmd);
         
         if (!connect()) {
             ROS_WARN("Cannot send command - not connected to robot");
@@ -175,21 +191,9 @@ public:
         // Sequence number
         packet.seq_nr = ++sequence_number_;
         
-        // Initialize payload to sentinel values (NO_CHANGE = -1)
-        // This ensures parameters not explicitly set won't overwrite robot settings
-        packet.target_wire_spd = NO_CHANGE;
-        packet.correction_val = NO_CHANGE;
-        packet.dyn_setting = NO_CHANGE;
-        packet.operation_mode = NO_CHANGE;
-        packet.std_pulse_val = NO_CHANGE;
-        packet.program_number = NO_CHANGE;
-        packet.arc_start_cmd = NO_CHANGE;
-        packet.gas_control = NO_CHANGE;
-        packet.jog_feed_cmd = NO_CHANGE;
-        packet.jog_retract_cmd = NO_CHANGE;
-        
-        // Copy values from ROS message (all values are copied directly)
-        // To leave a parameter unchanged, set it to -1 in the ROS message
+        // Copy values from ROS message.
+        // The publisher of the message is responsible for setting unused fields to the
+        // sentinel value NO_CHANGE (-1).
         packet.target_wire_spd = msg->target_wire_spd;
         packet.correction_val = msg->correction_val;
         packet.dyn_setting = msg->dyn_setting;
@@ -201,6 +205,18 @@ public:
         packet.jog_feed_cmd = msg->jog_feed_cmd;
         packet.jog_retract_cmd = msg->jog_retract_cmd;
         
+        ROS_INFO("--- Sending TCP Packet (seq: %u) ---", packet.seq_nr);
+        ROS_INFO("  prog_number: %d", (int32_t)packet.program_number);
+        ROS_INFO("  target_wire_spd: %d", (int32_t)packet.target_wire_spd);
+        ROS_INFO("  correction_val: %d", (int32_t)packet.correction_val);
+        ROS_INFO("  dyn_setting: %d", (int32_t)packet.dyn_setting);
+        ROS_INFO("  operation_mode: %d", (int32_t)packet.operation_mode);
+        ROS_INFO("  std_pulse_val: %d", (int32_t)packet.std_pulse_val);
+        ROS_INFO("  arc_start_cmd: %d", (int32_t)packet.arc_start_cmd);
+        ROS_INFO("  gas_control: %d", (int32_t)packet.gas_control);
+        ROS_INFO("  jog_feed_cmd: %d", (int32_t)packet.jog_feed_cmd);
+        ROS_INFO("  jog_retract_cmd: %d", (int32_t)packet.jog_retract_cmd);
+
         // Send packet
         ssize_t bytes_sent = send(sock_fd_, &packet, sizeof(packet), 0);
         if (bytes_sent != sizeof(packet)) {
@@ -222,16 +238,68 @@ public:
             uint32_t seq_nr;
         } reply;
         
-        ssize_t bytes_received = recv(sock_fd_, &reply, sizeof(reply), 0);
-        if (bytes_received == sizeof(reply)) {
+        // Robustly read exactly sizeof(reply) bytes
+        size_t expected_bytes = sizeof(reply);
+        size_t received_total = 0;
+        while (received_total < expected_bytes) {
+            ssize_t r = recv(sock_fd_, ((char*)&reply) + received_total, expected_bytes - received_total, 0);
+            if (r <= 0) {
+                ROS_WARN("Failed to receive acknowledgment from robot (recv returned %zd)", r);
+                disconnect();
+                break;
+            }
+            received_total += static_cast<size_t>(r);
+        }
+
+        if (received_total == expected_bytes) {
             if (reply.reply_type == 1) {  // RI_RT_SUCC
                 ROS_DEBUG("Command acknowledged successfully (seq: %u)", reply.seq_nr);
             } else {
-                ROS_WARN("Command failed on robot (seq: %u, reply_type: %u)", 
+                ROS_WARN("Command failed on robot (seq: %u, reply_type: %u)",
                          reply.seq_nr, reply.reply_type);
             }
         } else {
-            ROS_WARN("Failed to receive acknowledgment from robot");
+            ROS_WARN("Incomplete acknowledgment received: %zu of %zu bytes", received_total, expected_bytes);
+        }
+    }
+
+    void heartbeatCallback(const ros::TimerEvent&)
+    {
+        if (!connected_) {
+            return; // No connection, skip heartbeat
+        }
+        
+        ROS_DEBUG("Sending heartbeat to robot");
+        
+        // Prepare heartbeat packet
+        WeldCommandPacket packet;
+        memset(&packet, 0, sizeof(packet));
+        
+        // Header
+        packet.length = sizeof(packet);
+        packet.msg_type = RI_MT_WELDCMD;
+        packet.comm_type = RI_CT_SVCREQ;
+        packet.reply_type = RI_RT_INVAL;
+        
+        // Special heartbeat sequence number
+        packet.seq_nr = RI_SEQ_HB;
+        
+        // All payload fields set to NO_CHANGE (sentinel value)
+        packet.target_wire_spd = NO_CHANGE;
+        packet.correction_val = NO_CHANGE;
+        packet.dyn_setting = NO_CHANGE;
+        packet.operation_mode = NO_CHANGE;
+        packet.std_pulse_val = NO_CHANGE;
+        packet.program_number = NO_CHANGE;
+        packet.arc_start_cmd = NO_CHANGE;
+        packet.gas_control = NO_CHANGE;
+        packet.jog_feed_cmd = NO_CHANGE;
+        packet.jog_retract_cmd = NO_CHANGE;
+        
+        // Send heartbeat packet (no need to wait for reply)
+        ssize_t bytes_sent = send(sock_fd_, &packet, sizeof(packet), 0);
+        if (bytes_sent != sizeof(packet)) {
+            ROS_WARN("Failed to send heartbeat packet, disconnecting");
             disconnect();
         }
     }
