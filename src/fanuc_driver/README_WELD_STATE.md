@@ -104,12 +104,12 @@ TYPE
 
 #### 使用标准版本 (推荐)
 ```bash
-roslaunch fanuc_driver weld_state.launch robot_ip:=192.168.1.31
+roslaunch fanuc_driver weld_state.launch robot_ip:=127.0.0.1
 ```
 
 #### 使用原始版本 (调试用)
 ```bash
-roslaunch fanuc_driver weld_state.launch robot_ip:=192.168.1.31 use_bswap:=false
+roslaunch fanuc_driver weld_state.launch robot_ip:=127.0.0.1 use_bswap:=false
 ```
 
 #### 可用参数
@@ -209,12 +209,12 @@ int16 act_wire_spd   # 实际送丝速度 (固定为 0)
 ### 连接问题
 1. **检查网络连接**:
    ```bash
-   ping 192.168.1.31  # 替换为实际机器人IP
+   ping 127.0.0.1 # 替换为实际机器人IP
    ```
 
 2. **检查端口连通性**:
    ```bash
-   telnet 192.168.1.31 11002
+   telnet 127.0.0.1 11002
    ```
 
 3. **检查 KAREL 程序状态**:
