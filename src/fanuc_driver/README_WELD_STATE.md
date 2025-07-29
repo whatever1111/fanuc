@@ -102,20 +102,20 @@ TYPE
 
 ### 3. 启动 ROS 节点
 
-#### 使用标准版本 (推荐)
+#### 使用tcp版本
 ```bash
-roslaunch fanuc_driver weld_state.launch robot_ip:=192.168.1.31
+roslaunch fanuc_driver weld_state.launch robot_ip:=127.0.0.1 node_type:=tcp
 ```
 
-#### 使用原始版本 (调试用)
+#### 使用Simple Message版本（Ros industrial消息格式)
 ```bash
-roslaunch fanuc_driver weld_state.launch robot_ip:=192.168.1.31 use_bswap:=false
+roslaunch fanuc_driver weld_state.launch robot_ip:=127.0.0.1 node_type:=simple
 ```
 
 #### 可用参数
 - `robot_ip`: 机器人控制器 IP 地址
 - `robot_port`: TCP 端口 (默认: 11002)
-- `use_bswap`: 是否使用字节交换版本 (默认: false)
+- `node_type`: tcp/simple message版本
 
 ### 4. 监控数据
 ```bash
@@ -147,7 +147,7 @@ Header header
 bool arc_ok          # 电弧检测状态 (来自 DI[249])
 bool ready           # 焊机准备就绪 (固定为 TRUE)
 bool stick_err       # 送丝粘连错误 (固定为 FALSE)
-bool general_err     # 一般错误 (来自 DI[252])
+bool power_err       # 电源错误 (来自 DI[252])
 uint8 err_code       # 故障代码 (基于 DI[251]: 0=正常熔敷, 1=无熔敷)
 int16 act_voltage    # 实际电压 (来自 GI[2], 原始值)
 int16 act_current    # 实际电流 (来自 GI[3], 原始值)
@@ -209,12 +209,12 @@ int16 act_wire_spd   # 实际送丝速度 (固定为 0)
 ### 连接问题
 1. **检查网络连接**:
    ```bash
-   ping 192.168.1.31  # 替换为实际机器人IP
+   ping 127.0.0.1 # 替换为实际机器人IP
    ```
 
 2. **检查端口连通性**:
    ```bash
-   telnet 192.168.1.31 11002
+   telnet 127.0.0.1 11002
    ```
 
 3. **检查 KAREL 程序状态**:
