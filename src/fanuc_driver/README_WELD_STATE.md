@@ -147,7 +147,7 @@ Header header
 bool arc_ok          # 电弧检测状态 (来自 DI[249])
 bool ready           # 焊机准备就绪 (固定为 TRUE)
 bool stick_err       # 送丝粘连错误 (固定为 FALSE)
-bool general_err     # 一般错误 (来自 DI[252])
+bool power_err       # 电源错误 (来自 DI[252])
 uint8 err_code       # 故障代码 (基于 DI[251]: 0=正常熔敷, 1=无熔敷)
 int16 act_voltage    # 实际电压 (来自 GI[2], 原始值)
 int16 act_current    # 实际电流 (来自 GI[3], 原始值)
