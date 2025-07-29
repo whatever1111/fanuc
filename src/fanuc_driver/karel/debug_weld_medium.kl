@@ -1,0 +1,218 @@
+-- Medium complexity test version
+PROGRAM debug_weld_medium
+--------------------------------------------------------------------------------
+-- 
+-- Medium welding state reader for debugging build issues
+-- 
+--------------------------------------------------------------------------------
+%ALPHABETIZE
+%COMMENT = 'dbgmed'
+%NOBUSYLAMP
+%NOLOCKGROUP
+%NOPAUSE = COMMAND + TPENABLE + ERROR
+
+
+--------------------------------------------------------------------------------
+-- 
+-- remote types & constants
+-- 
+--------------------------------------------------------------------------------
+%INCLUDE include\libssock_t
+%INCLUDE include\libind_hdr_t
+%INCLUDE include\libind_pkt_t
+%INCLUDE include\libind_weld_t
+
+
+--------------------------------------------------------------------------------
+-- 
+-- local types & constants
+-- 
+--------------------------------------------------------------------------------
+TYPE
+	weld_cfg_t = STRUCTURE
+		checked      : BOOLEAN
+		loop_hz      : INTEGER
+		s_tcp_nr     : INTEGER
+		s_tag_nr     : INTEGER
+		um_clear     : BOOLEAN
+		volt_gi      : INTEGER
+		curr_gi      : INTEGER
+		arc_di       : INTEGER
+		power_err_di : INTEGER
+		depos_di     : INTEGER
+	ENDSTRUCTURE
+
+
+VAR
+	cfg_           IN SHADOW : weld_cfg_t
+	weld_pkt_out_            : ind_weld_t
+	sock_                    : ssock_t
+	sock_fd_                 : FILE
+	stat_                    : INTEGER
+	sleep_time_              : INTEGER
+	shutdwn_req_             : BOOLEAN
+
+
+CONST
+	LOG_PFIX     = 'DBGMED '
+	COND_AH      =    1
+	CFG_OK       =    0
+	CFG_NOTDONE  =   -1
+	HOST_CTAG_ER = 67144
+	FILE_ILL_PRM =  2032
+	SEV_ABORT    =    2
+	WELD_TAG     =    3
+	WELD_TCP_P   = 11002
+	LOOP_HZ      =   10
+	DEF_VOLT_GI      = 2
+	DEF_CURR_GI      = 3
+	DEF_ARC_DI       = 249
+	DEF_POWER_ERR_DI = 252
+	DEF_DEPOS_DI     = 251
+
+
+--------------------------------------------------------------------------------
+-- 
+-- remote routine prototypes
+-- 
+--------------------------------------------------------------------------------
+%INCLUDE include\libssock_h
+%INCLUDE include\libind_pkt_h
+%INCLUDE include\libind_hdr_h
+%INCLUDE include\libind_log_h
+
+
+--------------------------------------------------------------------------------
+-- 
+-- local routine prototypes
+-- 
+--------------------------------------------------------------------------------
+ROUTINE check_cfg_(cfg : weld_cfg_t) : INTEGER FROM debug_weld_medium
+ROUTINE install_ah_ FROM debug_weld_medium
+ROUTINE remove_ah_ FROM debug_weld_medium
+
+
+--------------------------------------------------------------------------------
+-- 
+-- Main program
+-- 
+--------------------------------------------------------------------------------
+BEGIN
+	-- check config
+	stat_ = check_cfg_(cfg_)
+	IF (stat_ <> CFG_OK) THEN
+		log_error_a(LOG_PFIX + 'cfg error:', stat_)
+		log_error(LOG_PFIX + 'check cfg')
+		log_force
+		POST_ERR(FILE_ILL_PRM, '', 0, SEV_ABORT)
+		RETURN
+	ENDIF
+
+	stat_        = 0
+	sleep_time_  = ROUND(1000.0 / cfg_.loop_hz)
+	shutdwn_req_ = FALSE
+
+	-- initialise ABORT handler
+	install_ah_
+
+	-- enable log output
+	IF (cfg_.um_clear) THEN log_clear; ENDIF
+
+	-- init welding state packet
+	USING weld_pkt_out_ DO
+		hdr_.length_     = 48
+		hdr_.msg_type_   = RI_MT_WELDST
+		hdr_.comm_type_  = RI_CT_TOPIC
+		hdr_.reply_type_ = 0
+	ENDUSING
+
+	-- init server socket
+	stat_ = ssock_ctor(sock_, cfg_.s_tcp_nr, cfg_.s_tag_nr)
+	IF (stat_ <> 0) THEN
+		IF (stat_ = TAG_CONF_ERR) THEN
+			log_error_a(LOG_PFIX + 'cfg err, TAG idx:', cfg_.s_tag_nr)
+		ELSE
+			log_error_a(LOG_PFIX + 'ssock_ctor err:', stat_)
+		ENDIF
+		POST_ERR(HOST_CTAG_ER, '', 0, SEV_ABORT)
+	ENDIF
+
+	-- make sure socket is closed
+	stat_ = ssock_dconnf(sock_)
+
+	-- disable the ABORT handler
+	remove_ah_
+
+	log_info(LOG_PFIX + 'Exit')
+
+END debug_weld_medium
+
+
+--------------------------------------------------------------------------------
+-- 
+-- Check and validate welding configuration
+-- 
+--------------------------------------------------------------------------------
+ROUTINE check_cfg_
+VAR
+	a__ : BOOLEAN
+BEGIN
+	a__ = FALSE
+
+	-- set defaults for any uninitialised entries
+	IF (UNINIT(cfg.loop_hz  )) THEN cfg.loop_hz   = LOOP_HZ      ; a__ = TRUE; ENDIF
+	IF (UNINIT(cfg.s_tcp_nr )) THEN cfg.s_tcp_nr  = WELD_TCP_P   ; a__ = TRUE; ENDIF
+	IF (UNINIT(cfg.s_tag_nr )) THEN cfg.s_tag_nr  = WELD_TAG     ; a__ = TRUE; ENDIF
+	IF (UNINIT(cfg.um_clear )) THEN cfg.um_clear  = TRUE         ; a__ = TRUE; ENDIF
+	IF (UNINIT(cfg.volt_gi     )) THEN cfg.volt_gi      = DEF_VOLT_GI     ; a__ = TRUE; ENDIF
+	IF (UNINIT(cfg.curr_gi     )) THEN cfg.curr_gi      = DEF_CURR_GI     ; a__ = TRUE; ENDIF
+	IF (UNINIT(cfg.arc_di      )) THEN cfg.arc_di       = DEF_ARC_DI      ; a__ = TRUE; ENDIF
+	IF (UNINIT(cfg.power_err_di)) THEN cfg.power_err_di = DEF_POWER_ERR_DI; a__ = TRUE; ENDIF
+	IF (UNINIT(cfg.depos_di    )) THEN cfg.depos_di     = DEF_DEPOS_DI    ; a__ = TRUE; ENDIF
+	IF (UNINIT(cfg.checked  )) THEN cfg.checked   = FALSE        ; a__ = TRUE; ENDIF
+
+	-- make sure user has checked configuration
+	IF ((NOT cfg.checked) OR a__) THEN RETURN (CFG_NOTDONE); ENDIF
+
+	-- all ok
+	RETURN (CFG_OK)
+END check_cfg_
+
+
+--------------------------------------------------------------------------------
+-- 
+-- Application handler for ABORT signals.
+-- 
+--------------------------------------------------------------------------------
+ROUTINE ab_hndlr_
+BEGIN
+	shutdwn_req_ = TRUE
+	CANCEL FILE sock_fd_
+END ab_hndlr_
+
+
+--------------------------------------------------------------------------------
+-- 
+-- Installs a condition handler that catches ABORT signals
+-- 
+--------------------------------------------------------------------------------
+ROUTINE install_ah_
+BEGIN
+	CONDITION[COND_AH]: WITH $SCAN_TIME = 256
+		WHEN ABORT DO
+			NOABORT
+			ab_hndlr_
+	ENDCONDITION
+	ENABLE CONDITION[COND_AH]
+END install_ah_
+
+
+--------------------------------------------------------------------------------
+-- 
+-- Deregisters the ABORT condition handler.
+-- 
+--------------------------------------------------------------------------------
+ROUTINE remove_ah_
+BEGIN
+	PURGE CONDITION[COND_AH]
+END remove_ah_

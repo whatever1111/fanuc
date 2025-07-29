@@ -1,0 +1,158 @@
+-- Minimal test version to isolate compilation issues
+PROGRAM debug_weld_minimal
+--------------------------------------------------------------------------------
+-- 
+-- Minimal welding state reader for debugging compilation issues
+-- 
+--------------------------------------------------------------------------------
+%ALPHABETIZE
+%COMMENT = 'dbgmin'
+%NOBUSYLAMP
+%NOLOCKGROUP
+%NOPAUSE = COMMAND + TPENABLE + ERROR
+
+
+--------------------------------------------------------------------------------
+-- 
+-- remote types & constants
+-- 
+--------------------------------------------------------------------------------
+%INCLUDE include\libssock_t
+%INCLUDE include\libind_hdr_t
+%INCLUDE include\libind_pkt_t
+%INCLUDE include\libind_weld_t
+
+
+--------------------------------------------------------------------------------
+-- 
+-- local types & constants
+-- 
+--------------------------------------------------------------------------------
+TYPE
+	simple_cfg_t = STRUCTURE
+		checked      : BOOLEAN
+		s_tcp_nr     : INTEGER
+		s_tag_nr     : INTEGER
+	ENDSTRUCTURE
+
+
+VAR
+	cfg_           IN SHADOW : simple_cfg_t
+	weld_pkt_out_            : ind_weld_t
+	stat_                    : INTEGER
+
+
+CONST
+	LOG_PFIX     = 'DBGMIN '
+	CFG_OK       =    0
+	CFG_NOTDONE  =   -1
+	WELD_TAG     =    3
+	WELD_TCP_P   = 11002
+
+
+--------------------------------------------------------------------------------
+-- 
+-- remote routine prototypes
+-- 
+--------------------------------------------------------------------------------
+%INCLUDE include\libssock_h
+%INCLUDE include\libind_pkt_h
+%INCLUDE include\libind_hdr_h
+%INCLUDE include\libind_log_h
+
+
+--------------------------------------------------------------------------------
+--
+-- local routine prototypes
+--
+--------------------------------------------------------------------------------
+ROUTINE check_simple_cfg_(cfg : simple_cfg_t) : INTEGER FROM debug_weld_minimal
+ROUTINE test_weld_serialize(weld_pkt : ind_weld_t) : INTEGER FROM debug_weld_minimal
+
+
+--------------------------------------------------------------------------------
+-- 
+-- Main program
+-- 
+--------------------------------------------------------------------------------
+BEGIN
+	-- check config
+	stat_ = check_simple_cfg_(cfg_)
+	IF (stat_ <> CFG_OK) THEN
+		log_error_a(LOG_PFIX + 'cfg error:', stat_)
+		RETURN
+	ENDIF
+
+	-- init welding state packet
+	USING weld_pkt_out_ DO
+		hdr_.length_     = 48
+		hdr_.msg_type_   = RI_MT_WELDST
+		hdr_.comm_type_  = RI_CT_TOPIC
+		hdr_.reply_type_ = 0
+	ENDUSING
+
+	-- test welding packet serialization
+	stat_ = test_weld_serialize(weld_pkt_out_)
+	IF (stat_ <> 0) THEN
+		log_error_a(LOG_PFIX + 'serialize test err:', stat_)
+		RETURN
+	ENDIF
+
+	log_info(LOG_PFIX + 'Test completed successfully')
+
+END debug_weld_minimal
+
+
+--------------------------------------------------------------------------------
+-- 
+-- Check configuration
+-- 
+--------------------------------------------------------------------------------
+ROUTINE check_simple_cfg_
+VAR
+	a__ : BOOLEAN
+BEGIN
+	a__ = FALSE
+
+	-- set defaults
+	IF (UNINIT(cfg.s_tcp_nr )) THEN cfg.s_tcp_nr  = WELD_TCP_P   ; a__ = TRUE; ENDIF
+	IF (UNINIT(cfg.s_tag_nr )) THEN cfg.s_tag_nr  = WELD_TAG     ; a__ = TRUE; ENDIF
+	IF (UNINIT(cfg.checked  )) THEN cfg.checked   = FALSE        ; a__ = TRUE; ENDIF
+
+	-- make sure user has checked configuration
+	IF ((NOT cfg.checked) OR a__) THEN RETURN (CFG_NOTDONE); ENDIF
+
+	-- all ok
+	RETURN (CFG_OK)
+END check_simple_cfg_
+
+
+--------------------------------------------------------------------------------
+--
+-- Test welding packet serialization (without FILE operations)
+--
+--------------------------------------------------------------------------------
+ROUTINE test_weld_serialize
+VAR
+	test_result : INTEGER
+BEGIN
+	-- Simple test without FILE operations
+	test_result = 0
+
+	-- Test packet structure access
+	USING weld_pkt DO
+		USING weld_data_ DO
+			arc_ok = TRUE
+			ready = FALSE
+			stick_err = FALSE
+			general_err = FALSE
+			err_code = 0
+			act_voltage = 1234
+			act_current = 5678
+			act_wire_spd = 9012
+		ENDUSING
+	ENDUSING
+
+	log_info(LOG_PFIX + 'Weld packet test completed')
+	RETURN (test_result)
+END test_weld_serialize
