@@ -102,20 +102,20 @@ TYPE
 
 ### 3. 启动 ROS 节点
 
-#### 使用标准版本 (推荐)
+#### 使用tcp版本
 ```bash
-roslaunch fanuc_driver weld_state.launch robot_ip:=127.0.0.1
+roslaunch fanuc_driver weld_state.launch robot_ip:=127.0.0.1 node_type:=tcp
 ```
 
-#### 使用原始版本 (调试用)
+#### 使用Simple Message版本（Ros industrial消息格式)
 ```bash
-roslaunch fanuc_driver weld_state.launch robot_ip:=127.0.0.1 use_bswap:=false
+roslaunch fanuc_driver weld_state.launch robot_ip:=127.0.0.1 node_type:=simple
 ```
 
 #### 可用参数
 - `robot_ip`: 机器人控制器 IP 地址
 - `robot_port`: TCP 端口 (默认: 11002)
-- `use_bswap`: 是否使用字节交换版本 (默认: false)
+- `node_type`: tcp/simple message版本
 
 ### 4. 监控数据
 ```bash
