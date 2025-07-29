@@ -129,6 +129,7 @@ VAR
 CONST
 	-- 
 	LOG_PFIX     = 'RWRLY '
+	NO_CHANGE    =   -1  -- Special value to indicate no change to a parameter
 
 	COND_AH      =    1  -- ABORT handler id
 
@@ -284,6 +285,8 @@ BEGIN
 
 		-- inform user
 		log_info(LOG_PFIX + 'Waiting for ROS weld relay')
+		-- Ensure any previous client connection is closed before accepting a new one
+		stat_ = ssock_dconn2(sock_, sock_fd_)
 
 		-- set socket in 'binary mode' (unformatted)
 		-- KAREL Reference Manual, MARRC75KR07091E Rev C, sec 7.3.1
@@ -427,7 +430,18 @@ BEGIN
 	-- Check if data is available without blocking  
 	-- Note: We need to read the full packet structure properly
 	BYTES_AHEAD(fdesc, bytes_avail, stat_check)
-	
+	-- Detect socket errors / disconnects
+	IF (stat_check <> 0) THEN
+		log_error_a(LOG_PFIX + 'BYTES_AHEAD err:', stat_check)
+		RETURN (-stat_check) -- Propagate error to trigger disconnect
+	ENDIF
+
+	-- If remote side closed connection, BYTES_AHEAD may report 0 bytes repeatedly
+	IF (bytes_avail = 0) THEN
+		-- No data available (could be keep-alive timeout or idle connection)
+		RETURN (0)
+	ENDIF
+
 	-- DEBUG: Log bytes available
 	log_info_a(LOG_PFIX + 'Bytes available:', bytes_avail)
 	
@@ -518,47 +532,71 @@ BEGIN
 	jog_feed       = cmd.weld_cmd_data_.jog_feed_cmd
 	jog_retract    = cmd.weld_cmd_data_.jog_retract_cmd
 
-	-- Log the command
-	log_info_a(LOG_PFIX + 'Setting wire speed to:', wire_speed)
-	log_info_a(LOG_PFIX + 'Setting correction to:', correction)
-	log_info_a(LOG_PFIX + 'Setting operation mode to:', operation_mode)
-	log_info_a(LOG_PFIX + 'Setting program number to:', program_num)
+	-- Log the received command values
+	log_info_a(LOG_PFIX + 'Recv wire speed:', wire_speed)
+	log_info_a(LOG_PFIX + 'Recv correction:', correction)
+	log_info_a(LOG_PFIX + 'Recv op mode:', operation_mode)
+	log_info_a(LOG_PFIX + 'Recv prog num:', program_num)
 
-	-- Write to Group Outputs (GO)
-	GOUT[cfg.prog_num_go]  = program_num    -- Program number
-	GOUT[cfg.wire_go]      = wire_speed     -- Wire feed speed
-	GOUT[cfg.correction_go]= correction     -- Correction value
-	GOUT[cfg.dyn_go]       = dyn_setting    -- Dynamic setting
-	GOUT[cfg.mode_go]      = operation_mode -- Operation mode
-	GOUT[cfg.std_pulse_go] = std_pulse      -- Std/Pulse setting
-
-	-- Write to Digital Outputs (DO) - only if command is active (non-zero)
-	IF (arc_start > 0) THEN
-		DOUT[cfg.arc_start_do] = TRUE
-		log_info(LOG_PFIX + 'Arc start ON')
-	ELSE
-		DOUT[cfg.arc_start_do] = FALSE
+	-- Write to Group Outputs (GO) only if the value is not NO_CHANGE
+	IF program_num <> NO_CHANGE THEN
+		GOUT[cfg.prog_num_go]  = program_num    -- Program number
+	ENDIF
+	IF wire_speed <> NO_CHANGE THEN
+		GOUT[cfg.wire_go]      = wire_speed     -- Wire feed speed
+	ENDIF
+	IF correction <> NO_CHANGE THEN
+		GOUT[cfg.correction_go]= correction     -- Correction value
+	ENDIF
+	IF dyn_setting <> NO_CHANGE THEN
+		GOUT[cfg.dyn_go]       = dyn_setting    -- Dynamic setting
+	ENDIF
+	IF operation_mode <> NO_CHANGE THEN
+		GOUT[cfg.mode_go]      = operation_mode -- Operation mode
+	ENDIF
+	IF std_pulse <> NO_CHANGE THEN
+		GOUT[cfg.std_pulse_go] = std_pulse      -- Std/Pulse setting
 	ENDIF
 
-	IF (gas_ctrl > 0) THEN
-		DOUT[cfg.gas_do] = TRUE
-		log_info(LOG_PFIX + 'Gas ON')
-	ELSE
-		DOUT[cfg.gas_do] = FALSE
+	-- Write to Digital Outputs (DO) only if the value is not NO_CHANGE
+	IF arc_start <> NO_CHANGE THEN
+		IF (arc_start > 0) THEN
+			DOUT[cfg.arc_start_do] = TRUE
+			log_info(LOG_PFIX + 'Arc start ON')
+		ELSE
+			DOUT[cfg.arc_start_do] = FALSE
+			log_info(LOG_PFIX + 'Arc start OFF')
+		ENDIF
 	ENDIF
 
-	IF (jog_feed > 0) THEN
-		DOUT[cfg.jog_feed_do] = TRUE
-		log_info(LOG_PFIX + 'Jog feed ON')
-	ELSE
-		DOUT[cfg.jog_feed_do] = FALSE
+	IF gas_ctrl <> NO_CHANGE THEN
+		IF (gas_ctrl > 0) THEN
+			DOUT[cfg.gas_do] = TRUE
+			log_info(LOG_PFIX + 'Gas ON')
+		ELSE
+			DOUT[cfg.gas_do] = FALSE
+			log_info(LOG_PFIX + 'Gas OFF')
+		ENDIF
 	ENDIF
 
-	IF (jog_retract > 0) THEN
-		DOUT[cfg.jog_retract_do] = TRUE
-		log_info(LOG_PFIX + 'Jog retract ON')
-	ELSE
-		DOUT[cfg.jog_retract_do] = FALSE
+	IF jog_feed <> NO_CHANGE THEN
+		IF (jog_feed > 0) THEN
+			DOUT[cfg.jog_feed_do] = TRUE
+			log_info(LOG_PFIX + 'Jog feed ON')
+		ELSE
+			DOUT[cfg.jog_feed_do] = FALSE
+			log_info(LOG_PFIX + 'Jog feed OFF')
+		ENDIF
+	ENDIF
+
+	IF jog_retract <> NO_CHANGE THEN
+		IF (jog_retract > 0) THEN
+			DOUT[cfg.jog_retract_do] = TRUE
+			log_info(LOG_PFIX + 'Jog retract ON')
+		ELSE
+			DOUT[cfg.jog_retract_do] = FALSE
+			log_info(LOG_PFIX + 'Jog retract OFF')
+		ENDIF
 	ENDIF
 
 	RETURN (0) -- Success

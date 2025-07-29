@@ -79,6 +79,7 @@ private:
     static const uint32_t RI_MT_WELDCMD = 14;  // Weld Command message type
     static const uint32_t RI_CT_SVCREQ = 1;   // Service Request
     static const uint32_t RI_RT_INVAL = 0;    // Invalid reply type for requests
+    static const int32_t NO_CHANGE = -1;      // Sentinel value for unchanged parameters
     
     uint32_t sequence_number_;
 
@@ -174,7 +175,21 @@ public:
         // Sequence number
         packet.seq_nr = ++sequence_number_;
         
-        // Payload - copy from ROS message
+        // Initialize payload to sentinel values (NO_CHANGE = -1)
+        // This ensures parameters not explicitly set won't overwrite robot settings
+        packet.target_wire_spd = NO_CHANGE;
+        packet.correction_val = NO_CHANGE;
+        packet.dyn_setting = NO_CHANGE;
+        packet.operation_mode = NO_CHANGE;
+        packet.std_pulse_val = NO_CHANGE;
+        packet.program_number = NO_CHANGE;
+        packet.arc_start_cmd = NO_CHANGE;
+        packet.gas_control = NO_CHANGE;
+        packet.jog_feed_cmd = NO_CHANGE;
+        packet.jog_retract_cmd = NO_CHANGE;
+        
+        // Copy values from ROS message (all values are copied directly)
+        // To leave a parameter unchanged, set it to -1 in the ROS message
         packet.target_wire_spd = msg->target_wire_spd;
         packet.correction_val = msg->correction_val;
         packet.dyn_setting = msg->dyn_setting;

@@ -1,3 +1,4 @@
+
 # Fanuc 焊接指令控制模块
 
 ## 概述
@@ -42,6 +43,15 @@
 - `DO[255]`: **气体控制 (Gas Control)** - `gas_control` (1=ON, 0=OFF)
 - `DO[257]`: **点动送丝 (Jog Wire Feed)** - `jog_feed_cmd` (1=ON, 0=OFF)
 - `DO[259]`: **点动收丝 (Jog Wire Retract)** - `jog_retract_cmd` (1=ON, 0=OFF)
+
+## 独立参数控制 (哨兵值机制)
+
+为了实现对单个焊接参数的独立控制，避免一个指令覆盖所有未指定的参数（例如在示教器上进行的临时修改），本系统采用“哨兵值”机制。
+
+- **哨兵值**: `-1`
+- **核心规则**: 当您通过 ROS 发送指令时，对于**任何不想修改的参数，都必须在消息中将其值显式设置为 `-1`**。机器人侧的 KAREL 程序会识别这个特殊值，并跳过对该参数的更新，从而保留其当前值。
+
+**重要**: 如果在 ROS 消息中将一个字段留空或设置为 `0`，系统会将其视为一个有效的目标值（例如，程序号0或送丝速度0），并会覆盖机器人上的现有设置。
 
 ## 消息格式
 
@@ -116,7 +126,7 @@ roslaunch fanuc_driver weld_control.launch robot_ip:=<YOUR_ROBOT_IP>
 可通过多种方式发送指令：
 
 #### a) 使用测试脚本 (推荐)
-`fanuc_driver` 包提供了一个功能丰富的 Python 测试脚本。
+`fanuc_driver` 包提供了一个功能丰富的 Python 测试脚本，**该脚本已内置哨兵值逻辑**，是进行测试和控制的首选方式。当您使用特定参数时，脚本会自动将所有其他参数设置为 `-1`。
 - **进入交互模式**:
   ```bash
   rosrun fanuc_driver weld_command_test.py --interactive
@@ -136,12 +146,21 @@ roslaunch fanuc_driver weld_control.launch robot_ip:=<YOUR_ROBOT_IP>
   ```
 
 #### b) 手动发布 ROS 话题
+**注意**: 使用 `rostopic pub` 时，所有未指定的 `uint32` 字段默认为 0。根据哨兵值规则，这会把所有未指定的参数重置为 0。因此，您必须手动将不想更改的参数设为 `-1`。
+
+**示例：仅设置程序号为 5，其他参数保持不变**
 ```bash
 rostopic pub /weld_command fanuc_driver/WeldCommand "{
-  target_wire_spd: 50, 
-  program_number: 1, 
-  arc_start_cmd: 1, 
-  gas_control: 1
+  target_wire_spd: -1, 
+  correction_val: -1,
+  dyn_setting: -1,
+  operation_mode: -1,
+  std_pulse_val: -1,
+  program_number: 5,         # <-- The only value we want to change
+  arc_start_cmd: -1, 
+  gas_control: -1,
+  jog_feed_cmd: -1,
+  jog_retract_cmd: -1
 }" -1
 ```
 
@@ -201,6 +220,11 @@ rostopic pub /weld_command fanuc_driver/WeldCommand "{
 3. **收到应答失败** (`Command failed on robot` 或 `Failed to receive acknowledgment`)
    - 这通常表示 KAREL 程序在执行指令时遇到问题。检查 KAREL 日志以获取详细错误信息。
    - 可能原因包括 I/O 配置错误、机器人处于非自动模式等。
+
+4. **参数被意外覆盖**
+   - **问题**: 在发送一个指令（例如只设置程序号）后，其他所有焊接参数（如送丝速度）都被重置为0。
+   - **原因**: 您发送的 ROS 消息中，未改变的参数没有被设置为哨兵值 `-1`。ROS 消息字段的默认值 `0` 是一个有效的指令值，因此会覆盖机器人上的设置。
+   - **解决方案**: 确保您的发布代码或 `rostopic pub` 指令将所有不想修改的参数字段的值都设置为 `-1`。
 
 ## 测试建议
 
