@@ -8,7 +8,7 @@
   <arg name="robot_ip" doc="IP of controller" default="192.168.1.31" />
 
   <!-- Port for welding state communication -->
-  <arg name="robot_port" doc="Port for welding state communication" default="11002" />
+  <arg name="robot_port" doc="Port for welding state communication" default="11004" />
 
   <!-- Debug mode for verbose logging -->
   <arg name="debug_mode" doc="Enable debug mode for verbose logging" default="true" />
