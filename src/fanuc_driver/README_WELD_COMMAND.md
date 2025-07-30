@@ -165,13 +165,13 @@ roslaunch fanuc_driver weld_control.launch robot_ip:=<YOUR_ROBOT_IP>
 - **发送单条指令**:
   ```bash
   # 设置程序号为1，送丝速度为50
-  rosrun fanuc_driver weld_command_test.py --program 1 --wire-speed 50
+  rosrun fanuc_driver weld_command_test.py --program 1 --wire_speed 50
   
   # 发送起弧指令
-  rosrun fanuc_driver weld_command_test.py --arc-start --gas-on
+  rosrun fanuc_driver weld_command_test.py --arc_start --gas_on
   
   # 发送停弧指令
-  rosrun fanuc_driver weld_command_test.py --arc-stop --gas-off
+  rosrun fanuc_driver weld_command_test.py --arc_stop --gas_off
   ```
 
 #### b) 手动发布 ROS 话题
@@ -276,7 +276,7 @@ rostopic pub /weld_command fanuc_driver/WeldCommand "{
 1. **连接测试**: 启动 `weld_control.launch`，观察 ROS 日志，应能看到 "Connected to robot" 的信息。
 2. **心跳验证**: 连接建立后，在KAREL日志中应能定期看到 "Received heartbeat frame" 信息（每3秒一次）。
 3. **基础指令测试**: 使用 `weld_command_test.py` 发送简单的指令，如 `--program 5`。在示教器的 I/O 界面查看 `GO[2]` 的值是否变为 5。
-4. **动作指令测试**: 发送 `--jog-feed` 指令，观察焊枪是否开始送丝。发送 `--jog-stop` 停止。
+4. **动作指令测试**: 发送 `--jog_feed` 指令，观察焊枪是否开始送丝。发送 `--jog_stop` 停止。
 5. **长期连接测试**: 保持连接10分钟以上，确认连接稳定，无意外断开。
 6. **断线恢复测试**: 用Ctrl+C中断ROS节点，等待10秒后重启，确认能正常重连。
 7. **交互模式测试**: 使用 `weld_command_test.py --interactive` 运行所有预设指令，全面测试系统功能。
