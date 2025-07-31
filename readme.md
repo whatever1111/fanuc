@@ -88,7 +88,7 @@ $ cd $HOME/catkin_ws
 # use the latest released version, replace 'noetic-devel' with 'noetic'
 # NOTE: 'noetic-devel' is compatible with ROS Noetic. Use the correct branch
 # for the OS + ROS version you're building these packages for
-$ git clone -b noetic-devel https://github.com/ros-industrial/fanuc.git src/fanuc
+$ git clone -b noetic-devel [https://github.com/ros-industrial/fanuc.git](https://github.com/whatever1111/fanuc.git) src/fanuc
 
 # check build dependencies. Note: this may install additional packages,
 # depending on the software installed on the machine
