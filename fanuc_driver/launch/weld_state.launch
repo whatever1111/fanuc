@@ -13,6 +13,9 @@
   <!-- 调试输出开关 -->
   <arg name="debug" default="false" doc="启用调试输出" />
 
+  <!-- 消息字节序: little 或 big -->
+  <arg name="byte_order" default="big" doc="消息字节序 (little 或 big)" />
+
   <!-- 发布Topic名称 -->
   <arg name="weld_state_topic" default="/weld_state" doc="焊接状态话题名称" />
 
@@ -25,6 +28,7 @@
     <param name="robot_ip" value="$(arg robot_ip)" />
     <param name="robot_port" value="$(arg robot_port)" />
     <param name="debug" value="$(arg debug)" />
+    <param name="byte_order" value="$(arg byte_order)" />
     <remap from="/weld_state" to="$(arg weld_state_topic)" />
   </node>
 
@@ -34,6 +38,7 @@
     <param name="robot_ip" value="$(arg robot_ip)" />
     <param name="robot_port" value="$(arg robot_port)" />
     <param name="debug" value="$(arg debug)" />
+    <param name="byte_order" value="$(arg byte_order)" />
     <remap from="/weld_state" to="$(arg weld_state_topic)" />
   </node>
 

@@ -43,6 +43,8 @@
 #include <unistd.h>
 #include <cstring>
 #include <vector>
+#include <algorithm>
+#include <cctype>
 #include <simple_message/simple_message.h>
 #include <simple_message/byte_array.h>
 
@@ -66,6 +68,7 @@ private:
   int robot_port_;
   int sock_fd_;
   bool debug_;
+  bool little_endian_;   // true: expect little-endian payload, false: big-endian
   
 public:
   FanucWeldStateNodeSimple() : nh_("~"), sock_fd_(-1)
@@ -74,6 +77,12 @@ public:
     nh_.param<std::string>("robot_ip", robot_ip_, "127.0.0.1");
     nh_.param<int>("robot_port", robot_port_, 11002);
     nh_.param<bool>("debug", debug_, false);
+
+    // Byte order parameter: "little" (default) or "big"
+    std::string byte_order_param;
+    nh_.param<std::string>("byte_order", byte_order_param, std::string("little"));
+    std::transform(byte_order_param.begin(), byte_order_param.end(), byte_order_param.begin(), ::tolower);
+    little_endian_ = (byte_order_param == "little" || byte_order_param == "le");
     
     // Setup publisher
     weld_state_pub_ = nh_.advertise<fanuc_driver::WeldState>("weld_state", 10);
@@ -81,6 +90,7 @@ public:
     ROS_INFO("Fanuc Weld State Simple Message Node Starting");
     ROS_INFO("Target: %s:%d", robot_ip_.c_str(), robot_port_);
     if (debug_) ROS_INFO("Debug mode enabled");
+    ROS_INFO("Expecting %s-endian robot messages", little_endian_ ? "little" : "big");
   }
   
   ~FanucWeldStateNodeSimple()
@@ -215,11 +225,30 @@ private:
       return false;
     }
     
-    // Parse header (Data from KAREL is Little Endian)
-    uint32_t length = *((uint32_t*)&header_buf[0]);
-    uint32_t msg_type = *((uint32_t*)&header_buf[4]);
-    uint32_t comm_type = *((uint32_t*)&header_buf[8]);
-    uint32_t reply_type = *((uint32_t*)&header_buf[12]);
+    // Helper lambdas for endian-aware reads
+    auto readUint32 = [this](const uint8_t* data) -> uint32_t
+    {
+      uint32_t val;
+      std::memcpy(&val, data, sizeof(uint32_t));
+      if (little_endian_)
+        return val;                // already little-endian on x86 host
+      else
+        return ntohl(val);         // convert big-endian (network) to host
+    };
+
+    auto readInt32 = [this](const uint8_t* data) -> int32_t
+    {
+      uint32_t tmp;
+      std::memcpy(&tmp, data, sizeof(uint32_t));
+      if (!little_endian_)
+        tmp = ntohl(tmp);
+      return static_cast<int32_t>(tmp);
+    };
+
+    uint32_t length     = readUint32(&header_buf[0]);
+    uint32_t msg_type   = readUint32(&header_buf[4]);
+    uint32_t comm_type  = readUint32(&header_buf[8]);
+    uint32_t reply_type = readUint32(&header_buf[12]);
     
     if (debug_)
     {
@@ -296,7 +325,7 @@ private:
     // Load data in normal order for FIFO unload
     for (int i = 0; i < 8; i++)
     {
-      int32_t value = *((int32_t*)&payload_buf[i * 4]);
+      int32_t value = readInt32(&payload_buf[i * 4]);
       data.load(value);
     }
     
