@@ -15,6 +15,7 @@ find_package(catkin REQUIRED COMPONENTS
 add_message_files(
   FILES
   WeldState.msg
+  WeldCommand.msg
 )
 
 # Generate messages
@@ -70,38 +71,42 @@ target_compile_definitions(
   ${industrial_robot_client_bswap_DEFINITIONS})
 
 
-# non-swapping Fanuc specific weld state node
-add_executable(${PROJECT_NAME}_weld_state
+# TCP version Weld state node (direct TCP connection)
+add_executable(${PROJECT_NAME}_weld_state_tcp
   src/fanuc_weld_state_node.cpp)
-target_link_libraries(${PROJECT_NAME}_weld_state
+target_link_libraries(${PROJECT_NAME}_weld_state_tcp
+  ${catkin_LIBRARIES})
+set_target_properties(${PROJECT_NAME}_weld_state_tcp
+  PROPERTIES OUTPUT_NAME fanuc_weld_state_node_tcp
+  PREFIX "")
+add_dependencies(${PROJECT_NAME}_weld_state_tcp ${PROJECT_NAME}_generate_messages_cpp)
+
+# Simple Message version Weld state node (ROS-Industrial protocol)
+add_executable(${PROJECT_NAME}_weld_state_simple
+  src/fanuc_weld_state_node_simple.cpp)
+target_link_libraries(${PROJECT_NAME}_weld_state_simple
   industrial_robot_client
   simple_message
   ${catkin_LIBRARIES})
-set_target_properties(${PROJECT_NAME}_weld_state
-  PROPERTIES OUTPUT_NAME weld_state
+set_target_properties(${PROJECT_NAME}_weld_state_simple
+  PROPERTIES OUTPUT_NAME fanuc_weld_state_node_simple
   PREFIX "")
 target_compile_definitions(
-  ${PROJECT_NAME}_weld_state
+  ${PROJECT_NAME}_weld_state_simple
   PRIVATE
   ${industrial_robot_client_DEFINITIONS})
-add_dependencies(${PROJECT_NAME}_weld_state ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
+add_dependencies(${PROJECT_NAME}_weld_state_simple ${PROJECT_NAME}_generate_messages_cpp)
 
 
-# byte-swapping Fanuc specific weld state node
-add_executable(${PROJECT_NAME}_weld_state_bswap
-  src/fanuc_weld_state_node.cpp)
-target_link_libraries(${PROJECT_NAME}_weld_state_bswap
-  industrial_robot_client_bswap
-  simple_message_bswap
+# Weld command node
+add_executable(${PROJECT_NAME}_weld_command
+  src/fanuc_weld_command_node.cpp)
+target_link_libraries(${PROJECT_NAME}_weld_command
   ${catkin_LIBRARIES})
-set_target_properties(${PROJECT_NAME}_weld_state_bswap
-  PROPERTIES OUTPUT_NAME weld_state_bswap
+set_target_properties(${PROJECT_NAME}_weld_command
+  PROPERTIES OUTPUT_NAME weld_command_node
   PREFIX "")
-target_compile_definitions(
-  ${PROJECT_NAME}_weld_state_bswap
-  PRIVATE
-  ${industrial_robot_client_bswap_DEFINITIONS})
-add_dependencies(${PROJECT_NAME}_weld_state_bswap ${${PROJECT_NAME}_EXPORTED_TARGETS} ${catkin_EXPORTED_TARGETS})
+add_dependencies(${PROJECT_NAME}_weld_command ${PROJECT_NAME}_generate_messages_cpp)
 
 
 # non-swapping Fanuc specific motion streaming interface
@@ -144,10 +149,10 @@ if (CATKIN_ENABLE_TESTING)
   set(rl_test_deps
     ${PROJECT_NAME}_robot_state
     ${PROJECT_NAME}_robot_state_bswap
-    ${PROJECT_NAME}_weld_state
-    ${PROJECT_NAME}_weld_state_bswap
     ${PROJECT_NAME}_motion_streaming_interface
-    ${PROJECT_NAME}_motion_streaming_interface_bswap)
+    ${PROJECT_NAME}_motion_streaming_interface_bswap
+    ${PROJECT_NAME}_weld_state_tcp
+    ${PROJECT_NAME}_weld_state_simple)
 
   if (TARGET joint_trajectory_action)
     # not nice, but industrial_robot_client doesn't prefix its targets
@@ -160,14 +165,12 @@ endif()
 
 
 install(TARGETS
-  ${PROJECT_NAME}_motion_streaming_interface
-  ${PROJECT_NAME}_motion_streaming_interface_bswap
-
   ${PROJECT_NAME}_robot_state
   ${PROJECT_NAME}_robot_state_bswap
-
-  ${PROJECT_NAME}_weld_state
-  ${PROJECT_NAME}_weld_state_bswap
+  ${PROJECT_NAME}_motion_streaming_interface
+  ${PROJECT_NAME}_motion_streaming_interface_bswap
+  ${PROJECT_NAME}_weld_state_tcp
+  ${PROJECT_NAME}_weld_state_simple
 
   DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
 )

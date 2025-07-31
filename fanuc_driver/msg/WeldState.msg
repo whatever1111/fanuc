@@ -7,10 +7,10 @@
 bool arc_ok         # I>0 signal - Arc is established and stable
 bool ready          # Welder is ready for operation
 bool stick_err      # Wire stick error detected
-bool general_err    # General error condition active
+bool power_err      # Power error condition active
 
-# Error code (8-bit value from EWM status word bits 8-15)
-uint8 err_code      # Specific fault code from welding power source
+# Deposition detection status (original boolean value from DI[251])
+bool depos_di       # Deposition detection status from DI[251]
 
 # Analog process values (raw 16-bit integers from EWM)
 # These should be scaled on the ROS side according to EWM manual:
