@@ -244,14 +244,10 @@ BEGIN
 				arc_ok = DIN[cfg_.arc_di]           -- DI[249] Arc detection
 				ready = TRUE                        -- Assume ready for testing
 				stick_err = FALSE                   -- No stick error for testing
-				general_err = DIN[cfg_.power_err_di] -- DI[252] Power error
+				power_err = DIN[cfg_.power_err_di]  -- DI[252] Power error
 				
-				-- Set error code based on deposition detection
-				IF DIN[cfg_.depos_di] THEN          -- DI[251] Deposition detection
-					err_code = 0                    -- Normal deposition
-				ELSE
-					err_code = 1                    -- No deposition detected
-				ENDIF
+				-- Send deposition detection status directly as boolean
+				depos_di = DIN[cfg_.depos_di]       -- DI[251] Deposition detection (original value)
 				
 				-- Set wire speed to a default value (not used in new mapping)
 				act_wire_spd = 0
@@ -394,12 +390,12 @@ BEGIN
 	stat__ = IO_STATUS(fdesc)
 	IF stat__ <> 0 THEN RETURN (-stat__); ENDIF
 
-	IF pkt.weld_data_.general_err THEN bool_int = 1; ELSE bool_int = 0; ENDIF
+	IF pkt.weld_data_.power_err THEN bool_int = 1; ELSE bool_int = 0; ENDIF
 	WRITE fdesc (bool_int)
 	stat__ = IO_STATUS(fdesc)
 	IF stat__ <> 0 THEN RETURN (-stat__); ENDIF
 
-	WRITE fdesc (pkt.weld_data_.err_code)
+	WRITE fdesc (pkt.weld_data_.depos_di)
 	stat__ = IO_STATUS(fdesc)
 	IF stat__ <> 0 THEN RETURN (-stat__); ENDIF
 
