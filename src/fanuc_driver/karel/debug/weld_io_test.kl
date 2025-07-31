@@ -1,0 +1,192 @@
+-- Welding I/O Test Program
+-- This program continuously monitors and displays welding-related
+-- register values for debugging fieldbus communication issues.
+
+PROGRAM weld_io_test
+%COMMENT = 'Welding I/O Debug Test Program'
+%NOLOCKGROUP
+
+%INCLUDE libind_weld_t.kl
+
+VAR
+    i : INTEGER
+    reg_val : INTEGER
+    status_word : INTEGER
+    voltage, current, wire_speed : INTEGER
+    loop_count : INTEGER
+    
+ROUTINE display_register_info
+BEGIN
+    WRITE('========================================', CR)
+    WRITE('WELDING I/O DEBUG - Cycle ', loop_count, CR)
+    WRITE('========================================', CR)
+    
+    -- Read and display all welding registers
+    status_word := R[WELD_R_STATUS_WORD]
+    WRITE('Status Word R[', WELD_R_STATUS_WORD, '] = ', status_word, CR)
+    
+    voltage := R[WELD_R_ACT_VOLT]
+    WRITE('Voltage R[', WELD_R_ACT_VOLT, '] = ', voltage, CR)
+    
+    current := R[WELD_R_ACT_CURR]
+    WRITE('Current R[', WELD_R_ACT_CURR, '] = ', current, CR)
+    
+    wire_speed := R[WELD_R_ACT_WIRE]
+    WRITE('Wire Speed R[', WELD_R_ACT_WIRE, '] = ', wire_speed, CR)
+    
+    WRITE('----------------------------------------', CR)
+    WRITE('STATUS WORD BIT ANALYSIS:', CR)
+    WRITE('  Bit 0 (arc_ok): ', (BAnd(status_word, 1) <> 0), CR)
+    WRITE('  Bit 1 (ready): ', (BAnd(status_word, 2) <> 0), CR)
+    WRITE('  Bit 2 (stick_err): ', (BAnd(status_word, 4) <> 0), CR)
+    WRITE('  Bit 3 (general_err): ', (BAnd(status_word, 8) <> 0), CR)
+    WRITE('  Error Code (bits 8-15): ', (BAnd(status_word, 65280) DIV 256), CR)
+    
+    WRITE('----------------------------------------', CR)
+    WRITE('SCALED VALUES (approximate):', CR)
+    WRITE('  Voltage: ', (voltage * 100 DIV 32767), 'V', CR)
+    WRITE('  Current: ', (current * 1000 DIV 32767), 'A', CR)
+    WRITE('  Wire Speed: ', (wire_speed * 40 DIV 32767), 'm/min', CR)
+    
+    WRITE('========================================', CR)
+END display_register_info
+
+ROUTINE check_register_changes
+VAR
+    prev_status, prev_voltage, prev_current, prev_wire : INTEGER
+    changes_detected : BOOLEAN
+BEGIN
+    -- Initialize previous values on first run
+    IF loop_count = 1 THEN
+        prev_status := R[WELD_R_STATUS_WORD]
+        prev_voltage := R[WELD_R_ACT_VOLT]
+        prev_current := R[WELD_R_ACT_CURR]
+        prev_wire := R[WELD_R_ACT_WIRE]
+        WRITE('CHANGE DETECTION: Initialized baseline values', CR)
+        RETURN
+    ENDIF
+    
+    changes_detected := FALSE
+    
+    -- Check for changes
+    IF R[WELD_R_STATUS_WORD] <> prev_status THEN
+        WRITE('CHANGE: Status word changed from ', prev_status, ' to ', R[WELD_R_STATUS_WORD], CR)
+        prev_status := R[WELD_R_STATUS_WORD]
+        changes_detected := TRUE
+    ENDIF
+    
+    IF R[WELD_R_ACT_VOLT] <> prev_voltage THEN
+        WRITE('CHANGE: Voltage changed from ', prev_voltage, ' to ', R[WELD_R_ACT_VOLT], CR)
+        prev_voltage := R[WELD_R_ACT_VOLT]
+        changes_detected := TRUE
+    ENDIF
+    
+    IF R[WELD_R_ACT_CURR] <> prev_current THEN
+        WRITE('CHANGE: Current changed from ', prev_current, ' to ', R[WELD_R_ACT_CURR], CR)
+        prev_current := R[WELD_R_ACT_CURR]
+        changes_detected := TRUE
+    ENDIF
+    
+    IF R[WELD_R_ACT_WIRE] <> prev_wire THEN
+        WRITE('CHANGE: Wire speed changed from ', prev_wire, ' to ', R[WELD_R_ACT_WIRE], CR)
+        prev_wire := R[WELD_R_ACT_WIRE]
+        changes_detected := TRUE
+    ENDIF
+    
+    IF NOT changes_detected THEN
+        WRITE('CHANGE DETECTION: No changes detected in cycle ', loop_count, CR)
+    ENDIF
+END check_register_changes
+
+ROUTINE test_weld_serialization
+VAR
+    test_state : weld_state_t
+    test_packet : ind_weld_t
+    j : INTEGER
+BEGIN
+    WRITE('SERIALIZATION TEST: Creating test packet...', CR)
+    
+    -- Set known test values
+    test_state.arc_ok := TRUE
+    test_state.ready := TRUE
+    test_state.stick_err := FALSE
+    test_state.general_err := FALSE
+    test_state.err_code := 42
+    test_state.act_voltage := 1000
+    test_state.act_current := 2000
+    test_state.act_wire_spd := 3000
+    
+    -- Serialize the data
+    iwd_srlise(test_state, test_packet)
+    
+    -- Print serialized bytes for verification
+    WRITE('SERIALIZATION TEST: Packet contents:', CR)
+    FOR j := 1 TO ARRAY_LEN(test_packet.weld_data) DO
+        WRITE('  Byte[', j, '] = ', test_packet.weld_data[j], CR)
+    ENDFOR
+    
+    WRITE('SERIALIZATION TEST: Complete', CR)
+END test_serialization
+
+ROUTINE display_menu
+BEGIN
+    WRITE('', CR)
+    WRITE('WELDING I/O DEBUG MENU:', CR)
+    WRITE('1. Display current register values', CR)
+    WRITE('2. Monitor register changes', CR)
+    WRITE('3. Test serialization function', CR)
+    WRITE('4. Continuous monitoring mode', CR)
+    WRITE('5. Exit program', CR)
+    WRITE('Enter choice (1-5): ', CR)
+END display_menu
+
+ROUTINE get_user_choice : INTEGER
+VAR
+    choice : INTEGER
+BEGIN
+    -- Simple input simulation - in real use, this would read from teach pendant
+    -- For automated testing, we'll cycle through options
+    choice := ((loop_count - 1) MOD 4) + 1
+    WRITE('Auto-selected choice: ', choice, CR)
+    RETURN choice
+END get_user_choice
+
+BEGIN
+    WRITE('WELDING I/O DEBUG PROGRAM STARTED', CR)
+    WRITE('This program will monitor welding registers and test functions', CR)
+    WRITE('Register mapping:', CR)
+    WRITE('  Status Word: R[', WELD_R_STATUS_WORD, ']', CR)
+    WRITE('  Voltage: R[', WELD_R_ACT_VOLT, ']', CR)
+    WRITE('  Current: R[', WELD_R_ACT_CURR, ']', CR)
+    WRITE('  Wire Speed: R[', WELD_R_ACT_WIRE, ']', CR)
+    WRITE('', CR)
+    
+    loop_count := 0
+    
+    -- Main test loop
+    FOR i := 1 TO 20 DO  -- Run 20 test cycles
+        loop_count := i
+        
+        WRITE('', CR)
+        WRITE('=== TEST CYCLE ', loop_count, ' ===', CR)
+        
+        -- Always display current values
+        display_register_info
+        
+        -- Check for changes every cycle
+        check_register_changes
+        
+        -- Test serialization every 5 cycles
+        IF (loop_count MOD 5) = 0 THEN
+            test_weld_serialization
+        ENDIF
+        
+        -- Wait between cycles
+        WRITE('Waiting 2 seconds before next cycle...', CR)
+        DELAY 2000
+    ENDFOR
+    
+    WRITE('', CR)
+    WRITE('WELDING I/O DEBUG PROGRAM COMPLETED', CR)
+    WRITE('Total cycles executed: ', loop_count, CR)
+END weld_io_test 

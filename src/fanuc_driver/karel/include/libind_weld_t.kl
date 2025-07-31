@@ -1,0 +1,66 @@
+--------------------------------------------------------------------------------
+--
+-- Software License Agreement (BSD License)
+--
+-- Copyright (c) 2024, YOUR_NAME
+-- All rights reserved.
+--
+-- Redistribution and use in source and binary forms, with or without
+-- modification, are permitted provided that the following conditions
+-- are met:
+--
+--  * Redistributions of source code must retain the above copyright
+--    notice, this list of conditions and the following disclaimer.
+--  * Redistributions in binary form must reproduce the above
+--    copyright notice, this list of conditions and the following
+--    disclaimer in the documentation and/or other materials provided
+--    with the distribution.
+--  * Neither the name of the YOUR_NAME nor the names of its
+--    contributors may be used to endorse or promote products derived
+--    from this software without specific prior written permission.
+--
+-- THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+-- "AS IS" AND ANY EXPRESS OR
+-- IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
+-- WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+-- ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR
+-- CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
+-- EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
+-- PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+-- PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
+-- LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+-- NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+-- SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+--
+--------------------------------------------------------------------------------
+
+--------------------------------------------------------------------------------
+--
+-- local types & constants
+--
+--------------------------------------------------------------------------------
+
+-- Welding message type constant
+CONST
+	RI_MT_WELDST = 15  -- Welding state message type
+
+
+-- Welding state structure
+TYPE
+	weld_state_t = STRUCTURE
+		arc_ok         : BOOLEAN  -- I>0, Arc established (from Bit 0 of status word)
+		ready          : BOOLEAN  -- Welder is ready (from Bit 1 of status word)
+		stick_err      : BOOLEAN  -- Wire stick error (from Bit 2 of status word)  
+		power_err      : BOOLEAN  -- Power error (from DI[252] power error)
+		depos_di       : BOOLEAN  -- Deposition detection (from DI[251] original value)
+		act_voltage    : INTEGER  -- Actual voltage (raw ADC value)
+		act_current    : INTEGER  -- Actual current (raw ADC value)
+		act_wire_spd   : INTEGER  -- Actual wire speed (raw ADC value)
+	ENDSTRUCTURE
+
+-- Complete welding packet structure
+TYPE
+	ind_weld_t = STRUCTURE
+		hdr_       : ind_hdr_t       -- Common header
+		weld_data_ : weld_state_t    -- Welding state data
+	ENDSTRUCTURE 
