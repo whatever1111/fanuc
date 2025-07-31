@@ -1,28 +1,47 @@
 <?xml version="1.0"?>
 <!-- 
-  Wrapper launch file for the Fanuc specific weld_state node.
-  
-  This node connects to the Fanuc robot controller to receive real-time
-  welding status information from an EWM welding power source connected
-  via fieldbus (Profinet/EthernetIP).
+  FANUC焊接状态监控Launch文件
+  连接到KAREL程序ros_weld_state_reader.kl获取焊接状态数据
 -->
 <launch>
-  <!-- IP of robot (or PC running simulation) -->
-  <arg name="robot_ip" doc="IP of controller" />
+  <!-- 机器人IP地址 -->
+  <arg name="robot_ip" default="127.0.0.1" doc="机器人控制器IP地址" />
+  
+  <!-- 焊接状态通信端口 -->
+  <arg name="robot_port" default="11002" doc="KAREL程序TCP端口" />
 
-  <!-- Port for welding state communication (default: 11002, same as robot_state) -->
-  <arg name="robot_port" default="11002" doc="TCP port for welding state communication" />
+  <!-- 调试输出开关 -->
+  <arg name="debug" default="false" doc="启用调试输出" />
 
-  <!-- Load the byte-swapping version of weld_state if required -->
-  <arg name="use_bswap" doc="If true, driver will byte-swap all incoming and outgoing data" />
+  <!-- 发布Topic名称 -->
+  <arg name="weld_state_topic" default="/weld_state" doc="焊接状态话题名称" />
 
-  <!-- put them on the parameter server -->
-  <param name="robot_ip_address" type="str" value="$(arg robot_ip)" />
-  <param name="robot_port"       type="int" value="$(arg robot_port)" />
+  <!-- 选择节点类型: tcp 或 simple -->
+  <arg name="node_type" default="simple" doc="节点类型: tcp (直接TCP连接) 或 simple (Simple Message协议)" />
 
-  <!-- load the correct version of the weld state node -->
-  <node if="$(arg use_bswap)" name="weld_state" 
-    pkg="fanuc_driver" type="weld_state_bswap" />
-  <node unless="$(arg use_bswap)" name="weld_state" 
-    pkg="fanuc_driver" type="weld_state" />
+  <!-- TCP版本焊接状态节点 (直接TCP连接) -->
+  <node if="$(eval arg('node_type') == 'tcp')" 
+        name="fanuc_weld_state_node" pkg="fanuc_driver" type="fanuc_weld_state_node_tcp" output="screen">
+    <param name="robot_ip" value="$(arg robot_ip)" />
+    <param name="robot_port" value="$(arg robot_port)" />
+    <param name="debug" value="$(arg debug)" />
+    <remap from="/weld_state" to="$(arg weld_state_topic)" />
+  </node>
+
+  <!-- Simple Message版本焊接状态节点 (ROS-Industrial协议) -->
+  <node if="$(eval arg('node_type') == 'simple')" 
+        name="fanuc_weld_state_node" pkg="fanuc_driver" type="fanuc_weld_state_node_simple" output="screen">
+    <param name="robot_ip" value="$(arg robot_ip)" />
+    <param name="robot_port" value="$(arg robot_port)" />
+    <param name="debug" value="$(arg debug)" />
+    <remap from="/weld_state" to="$(arg weld_state_topic)" />
+  </node>
+
+  <!-- 可选: 显示焊接状态数据到终端 -->
+  <node if="$(arg debug)" name="weld_state_echo" pkg="rostopic" type="rostopic" 
+        args="echo $(arg weld_state_topic)" output="screen" />
+        
+  <!-- 可选：记录焊接状态数据 -->
+  <node if="$(arg debug)" name="weld_state_recorder" pkg="rosbag" type="record" 
+        args="$(arg weld_state_topic) -o /tmp/weld_state" output="screen" />
 </launch> 
