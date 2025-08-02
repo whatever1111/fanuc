@@ -46,7 +46,7 @@
 
 using industrial_robot_client::robot_state_interface::RobotStateInterface;
 using industrial_robot_client::joint_relay_handler::JointRelayHandler;
-using industrial_utils::param::getJointNames;
+//using industrial_utils::param::getJointNames;
 
 
 class Fanuc_JointRelayHandler : public JointRelayHandler
@@ -67,10 +67,10 @@ public:
   }
 
 
-  virtual ~Fanuc_JointRelayHandler() {}
+  virtual ~Fanuc_JointRelayHandler() = default;
 
 
-  bool transform(const std::vector<double>& pos_in, std::vector<double>* pos_out)
+  bool transform(const std::vector<double>& pos_in, std::vector<double>* pos_out) override
   {
     // compensate for J2-J3 coupling in Fanuc manipulator, if required
     fanuc::utils::linkage_transform(pos_in, pos_out, J23_factor_);

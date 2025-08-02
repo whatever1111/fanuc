@@ -64,11 +64,11 @@ public:
   }
 
 
-  virtual ~Fanuc_JointTrajectoryStreamer() {}
+   ~Fanuc_JointTrajectoryStreamer() override = default;
 
 
   bool transform(const trajectory_msgs::JointTrajectoryPoint& pt_in,
-      trajectory_msgs::JointTrajectoryPoint* pt_out)
+      trajectory_msgs::JointTrajectoryPoint* pt_out) override
   {
     // sending points back to the Fanuc, so invert factor
     fanuc::utils::linkage_transform(pt_in, pt_out, -J23_factor_);

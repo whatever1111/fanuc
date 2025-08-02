@@ -1,8 +1,7 @@
 cmake_minimum_required(VERSION 3.0.2)
-
 project(fanuc_driver)
 
-set(CMAKE_CXX_STANDARD 11)
+set(CMAKE_CXX_STANDARD 14)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 # let industrial_robot_client pull in all other dependencies
@@ -10,6 +9,14 @@ find_package(catkin REQUIRED COMPONENTS
   industrial_robot_client
   message_generation
   std_msgs)
+
+
+# 为不同的构建类型设置编译标志
+# Debug 模式: 调试信息和所有警告
+set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} -g -Wall -Wextra -Wpedantic -Wshadow -Wconversion -Wno-unused-parameter")
+
+# Release 模式: 优化和基础警告
+set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -O3 -DNDEBUG -Wall -Wextra")
 
 # Add message files
 add_message_files(

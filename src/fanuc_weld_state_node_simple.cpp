@@ -55,7 +55,7 @@ const int WELD_STATE_MSG_TYPE = 15;
 // Scaling factors from EWM manual
 const double VOLTAGE_SCALE = 100.0 / 32767.0;   // Raw to Volts
 const double CURRENT_SCALE = 1000.0 / 32767.0;  // Raw to Amperes
-const double WIRE_SPEED_SCALE = 40.0 / 32767.0; // Raw to m/min
+//const double WIRE_SPEED_SCALE = 40.0 / 32767.0; // Raw to m/min
 
 class FanucWeldStateNodeSimple
 {
@@ -107,7 +107,7 @@ public:
     struct sockaddr_in server_addr;
     memset(&server_addr, 0, sizeof(server_addr));
     server_addr.sin_family = AF_INET;
-    server_addr.sin_port = htons(robot_port_);
+    server_addr.sin_port = htons(static_cast<uint16_t>(robot_port_));
     
     if (inet_pton(AF_INET, robot_ip_.c_str(), &server_addr.sin_addr) <= 0)
     {
@@ -201,7 +201,7 @@ private:
         }
         return false;
       }
-      received += result;
+      received += static_cast<size_t>(result);
     }
     return true;
   }
@@ -300,7 +300,11 @@ private:
       data.load(value);
     }
     
-    msg.init(msg_type, comm_type, reply_type, data);
+    // Explicitly cast to signed 32-bit integers to avoid -Wsign-conversion warnings
+    msg.init(static_cast<int32_t>(msg_type),
+             static_cast<int32_t>(comm_type),
+             static_cast<int32_t>(reply_type),
+             data);
     
     // Clean up if we allocated memory
     if (length == 32)
@@ -349,9 +353,9 @@ private:
     
     // Parse weld data (Little Endian)
     int32_t weld_ints[8];
-    for (int i = 0; i < 8; i++)
+    for (std::size_t i = 0; i < 8; i++)
     {
-      weld_ints[i] = *((int32_t*)&buffer[i * 4]);
+      weld_ints[i] = *reinterpret_cast<int32_t*>(&buffer[i * 4]);
     }
     
     if (debug_)
