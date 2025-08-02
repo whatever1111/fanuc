@@ -34,7 +34,7 @@
 ### 心跳机制
 本系统采用了专门的心跳机制来确保长期连接的稳定性：
 
-- **ROS端心跳**: C++节点每3秒自动发送一个心跳包（序列号为 -110），所有payload字段设为哨兵值 -1
+- **ROS端心跳**: C++节点每3秒自动发送一个心跳包（序列号为 -110），所有 payload 字段设为哨兵值 0xFFFFFFFF
 - **KAREL端处理**: 机器人接收到心跳包后：
   - 重置空闲计时器 (`idle_counter_ = 0`)
   - 发送成功应答
@@ -77,8 +77,8 @@
 
 为了实现对单个焊接参数的独立控制，避免一个指令覆盖所有未指定的参数（例如在示教器上进行的临时修改），本系统采用“哨兵值”机制。
 
-- **哨兵值**: `-1`
-- **核心规则**: 当您通过 ROS 发送指令时，对于**任何不想修改的参数，都必须在消息中将其值显式设置为 `-1`**。机器人侧的 KAREL 程序会识别这个特殊值，并跳过对该参数的更新，从而保留其当前值。
+- **哨兵值**: `0xFFFFFFFF` (4294967295，所有位为 1，可在 rostopic/YAML 中写作 `-1`)
+- **核心规则**: 当您通过 ROS 发送指令时，对于**任何不想修改的参数，都必须在消息中将其值显式设置为哨兵值**（即 `0xFFFFFFFF` / `-1`）。机器人侧的 KAREL 程序会识别该特殊值，并跳过对该参数的更新，从而保留其当前值。
 
 **重要**: 如果在 ROS 消息中将一个字段留空或设置为 `0`，系统会将其视为一个有效的目标值（例如，程序号0或送丝速度0），并会覆盖机器人上的现有设置。
 
@@ -109,34 +109,34 @@ ROS 节点与 KAREL 程序之间通过一个固定结构的 TCP 数据包进行�
 - **Sequence Number** (4 bytes): `seq_nr_`，用于追踪指令。
 - **Payload** (40 bytes): `ind_weld_cmd_data_t` 结构，包含 10 个 `uint32` (KAREL 中为 `INTEGER`) 类型的焊接指令字段。
 
-### Endianness (Byte Order)
+## 大小端支持 (byte_order 参数)
 
-默认情况下，KAREL 通过 `WRITE`/`SOCKET` 指令输出 **小端 (Little-Endian)** 序列，
-而 C++ 节点直接使用 `*reinterpret_cast<uint32_t*>(buf)` 解析，这意味着
-**双方必须使用相同的字节序**。
+自 **v1.1.0**（2024-05）起，焊接指令模块已支持同时兼容 **little-endian** 与 **big-endian** 两种字节序格式。
 
-* **验证**：可将 `seq_nr_` 暂时设为 `16#11223344`，在 ROS 端打开 `--debug`，
-  如果看到 `44 33 22 11` 则表示链路为小端；若顺序反转，则说明处于大端模式。
-* **大端兼容**：若 ROS 节点运行在大端 CPU 或网络环境强制转换了字节序，
-  请参照 `README_WELD_STATE.md` 中的「大小端对齐」章节，对 KAREL 端使用
-  `SWAP32()`，并在 C++ 端使用 `htonl()/ntohl()` 或 `std::byteswap` 进行转换。
+在启动文件或命令行中通过参数 `byte_order` 进行配置：
 
-### 大小端 (Byte Order) 说明
-KAREL 端发送的所有 `INTEGER` 字段均采用 **小端序 (Little-Endian)**。ROS C++ 节点在常见的 PC/ARM 平台上也默认按小端解析，两端即可直接通信。
+```bash
+# 默认 little-endian（无需显式指定）
+roslaunch fanuc_driver weld_control.launch robot_ip:=<IP>
 
-如果需在 **大端序** 设备上运行 ROS 节点，或者你希望将网络流改为 **大端 (Network / Big-Endian)**，请遵循以下原则：
+# 如果机器人侧 KAREL 程序使用 big-endian
+roslaunch fanuc_driver weld_control.launch robot_ip:=<IP> byte_order:=big
+```
 
-1. **两端字节序必须保持一致**。任何一端修改后，都必须同步修改另一端。
-2. **在 C++ 端交换字节** (推荐)：
-   ```cpp
-   uint32_t le = *reinterpret_cast<uint32_t*>(&buf[pos]);
-   #if __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
-     le = __builtin_bswap32(le);
-   #endif
-   ```
-3. **在 KAREL 端交换字节**：使用自定义 `SWAP_INT` 函数或手动移位，在写入前将数据转换为大端格式，并在 C++ 端直接读取。
+可选值：
 
-完成修改后，请重新 `catkin_make` 并重新部署 `.kl` 程序，以确保新字节序设置生效。
+- `little` / `le`  → 主机字节序（小端，默认，x86/ARM Linux 环境常用）
+- `big` / `be`     → 网络字节序（大端）。需要 KAREL 端 `ros_weld_relay.kl` 与 `ros_weld_state_reader.kl` 设置相同的端序。
+
+节点启动后会打印类似日志以供核对：
+
+```
+Expecting little-endian robot messages
+# 或
+Expecting big-endian robot messages
+```
+
+---
 
 ## 使用步骤
 
@@ -179,12 +179,13 @@ roslaunch fanuc_driver weld_control.launch robot_ip:=<YOUR_ROBOT_IP>
 - **`robot_ip`**: 机器人控制器的 IP 地址。
 - **`robot_port`**: KAREL 程序监听的端口 (默认: 11002)。
 - **`debug`**: 是否开启调试模式 (默认: false)。
+- **`byte_order`**: 消息字节序，可选 `little`（默认）或 `big`，用以匹配机器人控制器端的大小端格式。
 
 ### 4. 发送焊接指令
 可通过多种方式发送指令：
 
 #### a) 使用测试脚本 (推荐)
-`fanuc_driver` 包提供了一个功能丰富的 Python 测试脚本，**该脚本已内置哨兵值逻辑**，是进行测试和控制的首选方式。当您使用特定参数时，脚本会自动将所有其他参数设置为 `-1`。
+`fanuc_driver` 包提供了一个功能丰富的 Python 测试脚本，**该脚本已内置哨兵值逻辑**，是进行测试和控制的首选方式。当您使用特定参数时，脚本会自动将所有其他参数设置为哨兵值 (`-1` / `0xFFFFFFFF`)。
 - **进入交互模式**:
   ```bash
   rosrun fanuc_driver weld_command_test.py --interactive
@@ -204,12 +205,12 @@ roslaunch fanuc_driver weld_control.launch robot_ip:=<YOUR_ROBOT_IP>
   ```
 
 #### b) 手动发布 ROS 话题
-**注意**: 使用 `rostopic pub` 时，所有未指定的 `uint32` 字段默认为 0。根据哨兵值规则，这会把所有未指定的参数重置为 0。因此，您必须手动将不想更改的参数设为 `-1`。
+**注意**: 使用 `rostopic pub` 时，所有未指定的 `uint32` 字段默认为 0。根据哨兵值规则，这会把所有未指定的参数重置为 0。因此，您必须手动将不想更改的参数设为哨兵值 (`-1` / `0xFFFFFFFF`)。
 
 **示例：仅设置程序号为 5，其他参数保持不变**
 ```bash
 rostopic pub /weld_command fanuc_driver/WeldCommand "{
-  target_wire_spd: -1, 
+  target_wire_spd: -1,  # 哨兵值 (-1 / 0xFFFFFFFF) 
   correction_val: -1,
   dyn_setting: -1,
   operation_mode: -1,
@@ -281,8 +282,8 @@ rostopic pub /weld_command fanuc_driver/WeldCommand "{
 
 4. **参数被意外覆盖**
    - **问题**: 在发送一个指令（例如只设置程序号）后，其他所有焊接参数（如送丝速度）都被重置为0。
-   - **原因**: 您发送的 ROS 消息中，未改变的参数没有被设置为哨兵值 `-1`。ROS 消息字段的默认值 `0` 是一个有效的指令值，因此会覆盖机器人上的设置。
-   - **解决方案**: 确保您的发布代码或 `rostopic pub` 指令将所有不想修改的参数字段的值都设置为 `-1`。
+   - **原因**: 您发送的 ROS 消息中，未改变的参数没有被设置为哨兵值 (`-1` / `0xFFFFFFFF`)。ROS 消息字段的默认值 `0` 是一个有效的指令值，因此会覆盖机器人上的设置。
+   - **解决方案**: 确保您的发布代码或 `rostopic pub` 指令将所有不想修改的参数字段的值都设置为哨兵值 (`-1` / `0xFFFFFFFF`)。
 
 5. **连接频繁断开**
    - **问题**: 连接建立后很快就断开，特别是在长时间无指令发送时。

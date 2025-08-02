@@ -198,25 +198,9 @@ int16 act_wire_spd   # 实际送丝速度 (固定为 0)
 4. **Launch 文件** (`launch/weld_state.launch`)
    * 无需改动；节点参数不变。
 
-5. **大小端 (Endianness) 对齐**
-
-   * **缺省设置**：KAREL 使用 `WRITE` 指令写入时 **始终采用小端 (Little-Endian)**。
-     C++ 节点通过 `*reinterpret_cast<int32_t*>(&buf[i*4])` 直接按主机字节序解析，同样假定为小端。
-     因此 **默认情况下双方字节序保持一致**，无需额外设置。
-
-   * **如何检查**：可在 KAREL 中临时将 `hdr_.length_` 赋值为 `16#01020304` 之类的易识别值，
-     然后在 ROS 端打印接收到的头部字节序列并确认顺序是否为 `04 03 02 01`。若顺序相反则说明
-     网络链路或目标 CPU 使用大端，需要进行调整。
-
-   * **切换为大端**（仅当必要时）：如果必须在大端 CPU 上运行 ROS 节点，或通过某些网关
-     导致字节序被交换，则需 **同时** 修改 KAREL 与 C++ 端：
-       1. **KAREL** – 在 `iwd_srlise()`/`iwd_dslice_state` 等序列化函数中使用 `SWAP32()` 宏
-          （或手动拆分字节）后再 `WRITE`。
-       2. **C++** – 在 `receiveSimpleMessage()` / `processWeldStateMessage()` 中使用
-          `ntohl()`/`htonl()` 或 `std::byteswap` 对 32-bit 整数进行转换，而不再直接用指针转换。
-     两端务必保持一致，否则将导致解析错误。
-
-   修改完成后，请重新 `catkin_make`，重新部署 `.kl` 程序并重启节点，以生效新的字节序配置。
+5. **确保大小端一致 & 重新编译**
+   * KAREL 默认使用小端写入；C++ 端按 `*((int32_t*)&buf[i*4])` 解析同样为小端。只要双方一致即可。
+   * 完成上述修改后，重新 `catkin_make`，部署新 `.kl` 程序并启动节点。
 
 **`length` 字段始终 = `msg_type` 之后所有字节数**。每新增一个 `INT32` 字段，`length` 与 `payload` 均需 **+4**，否则接收端会提示 *"Invalid header format"*。
 
