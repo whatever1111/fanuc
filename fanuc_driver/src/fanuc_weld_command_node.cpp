@@ -40,6 +40,8 @@
 #include <arpa/inet.h>
 #include <unistd.h>
 #include <string.h>
+#include <algorithm>
+#include <cctype>
 
 class FanucWeldCommandNode
 {
@@ -52,6 +54,7 @@ private:
     int robot_port_;
     int sock_fd_;
     bool connected_;
+    bool little_endian_;  // true: little-endian (default), false: big-endian
     
     // ROS-Industrial packet structure for welding commands
     struct WeldCommandPacket {
@@ -80,7 +83,7 @@ private:
     static const uint32_t RI_MT_WELDCMD = 14;  // Weld Command message type
     static const uint32_t RI_CT_SVCREQ = 1;   // Service Request
     static const uint32_t RI_RT_INVAL = 0;    // Invalid reply type for requests
-    static const int32_t NO_CHANGE = -1;      // Sentinel value for unchanged parameters
+    static const uint32_t NO_CHANGE = 0xFFFFFFFF;  // Sentinel value for unchanged parameters (all bits set)
     static const int32_t RI_SEQ_HB = -110;    // Heartbeat frame sequence number
     
     uint32_t sequence_number_;
@@ -92,6 +95,13 @@ public:
         // Get parameters from private namespace
         nh_.param<std::string>("robot_ip", robot_ip_, "127.0.0.1");
         nh_.param<int>("robot_port", robot_port_, 11002);
+
+        // Byte order parameter: "little" (default) or "big"
+        std::string byte_order_param;
+        nh_.param<std::string>("byte_order", byte_order_param, std::string("little"));
+        std::transform(byte_order_param.begin(), byte_order_param.end(), byte_order_param.begin(), ::tolower);
+        little_endian_ = (byte_order_param == "little" || byte_order_param == "le");
+        ROS_INFO("Expecting %s-endian robot messages", little_endian_ ? "little" : "big");
         
         ROS_INFO("Fanuc Weld Command Node starting");
         ROS_INFO("Target robot: %s:%d", robot_ip_.c_str(), robot_port_);
@@ -128,7 +138,8 @@ public:
         struct sockaddr_in server_addr;
         memset(&server_addr, 0, sizeof(server_addr));
         server_addr.sin_family = AF_INET;
-        server_addr.sin_port = htons(robot_port_);
+        // Explicitly cast to uint16_t to avoid implicit narrowing warning
+        server_addr.sin_port = htons(static_cast<uint16_t>(robot_port_));
         
         if (inet_pton(AF_INET, robot_ip_.c_str(), &server_addr.sin_addr) <= 0) {
             ROS_ERROR("Invalid IP address: %s", robot_ip_.c_str());
@@ -193,17 +204,28 @@ public:
         
         // Copy values from ROS message.
         // The publisher of the message is responsible for setting unused fields to the
-        // sentinel value NO_CHANGE (-1).
-        packet.target_wire_spd = msg->target_wire_spd;
-        packet.correction_val = msg->correction_val;
-        packet.dyn_setting = msg->dyn_setting;
-        packet.operation_mode = msg->operation_mode;
-        packet.std_pulse_val = msg->std_pulse_val;
-        packet.program_number = msg->program_number;
-        packet.arc_start_cmd = msg->arc_start_cmd;
-        packet.gas_control = msg->gas_control;
-        packet.jog_feed_cmd = msg->jog_feed_cmd;
-        packet.jog_retract_cmd = msg->jog_retract_cmd;
+        // sentinel value NO_CHANGE (0xFFFFFFFF).
+        packet.target_wire_spd = static_cast<uint32_t>(msg->target_wire_spd);
+        packet.correction_val  = static_cast<uint32_t>(msg->correction_val);
+        packet.dyn_setting     = static_cast<uint32_t>(msg->dyn_setting);
+        packet.operation_mode  = static_cast<uint32_t>(msg->operation_mode);
+        packet.std_pulse_val   = static_cast<uint32_t>(msg->std_pulse_val);
+        packet.program_number  = static_cast<uint32_t>(msg->program_number);
+        packet.arc_start_cmd   = static_cast<uint32_t>(msg->arc_start_cmd);
+        packet.gas_control     = static_cast<uint32_t>(msg->gas_control);
+        packet.jog_feed_cmd    = static_cast<uint32_t>(msg->jog_feed_cmd);
+        packet.jog_retract_cmd = static_cast<uint32_t>(msg->jog_retract_cmd);
+
+        // Convert to big-endian if required
+        if (!little_endian_)
+        {
+            uint32_t* p = reinterpret_cast<uint32_t*>(&packet);
+            size_t cnt = sizeof(packet) / sizeof(uint32_t);
+            for (size_t i = 0; i < cnt; ++i)
+            {
+                p[i] = htonl(p[i]);
+            }
+        }
         
         ROS_INFO("--- Sending TCP Packet (seq: %u) ---", packet.seq_nr);
         ROS_INFO("  prog_number: %d", (int32_t)packet.program_number);
@@ -251,6 +273,15 @@ public:
             received_total += static_cast<size_t>(r);
         }
 
+        if (!little_endian_)
+        {
+            reply.length     = ntohl(reply.length);
+            reply.msg_type   = ntohl(reply.msg_type);
+            reply.comm_type  = ntohl(reply.comm_type);
+            reply.reply_type = ntohl(reply.reply_type);
+            reply.seq_nr     = ntohl(reply.seq_nr);
+        }
+
         if (received_total == expected_bytes) {
             if (reply.reply_type == 1) {  // RI_RT_SUCC
                 ROS_DEBUG("Command acknowledged successfully (seq: %u)", reply.seq_nr);
@@ -282,7 +313,7 @@ public:
         packet.reply_type = RI_RT_INVAL;
         
         // Special heartbeat sequence number
-        packet.seq_nr = RI_SEQ_HB;
+        packet.seq_nr = static_cast<uint32_t>(RI_SEQ_HB);
         
         // All payload fields set to NO_CHANGE (sentinel value)
         packet.target_wire_spd = NO_CHANGE;
@@ -296,6 +327,14 @@ public:
         packet.jog_feed_cmd = NO_CHANGE;
         packet.jog_retract_cmd = NO_CHANGE;
         
+        // Convert to big-endian if required
+        if (!little_endian_)
+        {
+            uint32_t* p = reinterpret_cast<uint32_t*>(&packet);
+            size_t cnt = sizeof(packet) / sizeof(uint32_t);
+            for (size_t i = 0; i < cnt; ++i) { p[i] = htonl(p[i]); }
+        }
+
         // Send heartbeat packet (no need to wait for reply)
         ssize_t bytes_sent = send(sock_fd_, &packet, sizeof(packet), 0);
         if (bytes_sent != sizeof(packet)) {
