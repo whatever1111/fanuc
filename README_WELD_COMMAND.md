@@ -109,6 +109,35 @@ ROS 节点与 KAREL 程序之间通过一个固定结构的 TCP 数据包进行�
 - **Sequence Number** (4 bytes): `seq_nr_`，用于追踪指令。
 - **Payload** (40 bytes): `ind_weld_cmd_data_t` 结构，包含 10 个 `uint32` (KAREL 中为 `INTEGER`) 类型的焊接指令字段。
 
+### Endianness (Byte Order)
+
+默认情况下，KAREL 通过 `WRITE`/`SOCKET` 指令输出 **小端 (Little-Endian)** 序列，
+而 C++ 节点直接使用 `*reinterpret_cast<uint32_t*>(buf)` 解析，这意味着
+**双方必须使用相同的字节序**。
+
+* **验证**：可将 `seq_nr_` 暂时设为 `16#11223344`，在 ROS 端打开 `--debug`，
+  如果看到 `44 33 22 11` 则表示链路为小端；若顺序反转，则说明处于大端模式。
+* **大端兼容**：若 ROS 节点运行在大端 CPU 或网络环境强制转换了字节序，
+  请参照 `README_WELD_STATE.md` 中的「大小端对齐」章节，对 KAREL 端使用
+  `SWAP32()`，并在 C++ 端使用 `htonl()/ntohl()` 或 `std::byteswap` 进行转换。
+
+### 大小端 (Byte Order) 说明
+KAREL 端发送的所有 `INTEGER` 字段均采用 **小端序 (Little-Endian)**。ROS C++ 节点在常见的 PC/ARM 平台上也默认按小端解析，两端即可直接通信。
+
+如果需在 **大端序** 设备上运行 ROS 节点，或者你希望将网络流改为 **大端 (Network / Big-Endian)**，请遵循以下原则：
+
+1. **两端字节序必须保持一致**。任何一端修改后，都必须同步修改另一端。
+2. **在 C++ 端交换字节** (推荐)：
+   ```cpp
+   uint32_t le = *reinterpret_cast<uint32_t*>(&buf[pos]);
+   #if __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
+     le = __builtin_bswap32(le);
+   #endif
+   ```
+3. **在 KAREL 端交换字节**：使用自定义 `SWAP_INT` 函数或手动移位，在写入前将数据转换为大端格式，并在 C++ 端直接读取。
+
+完成修改后，请重新 `catkin_make` 并重新部署 `.kl` 程序，以确保新字节序设置生效。
+
 ## 使用步骤
 
 ### 1. 编译系统
