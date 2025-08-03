@@ -9,6 +9,8 @@
   <arg name="debug" default="false" />
   <!-- 消息字节序: little 或 big -->
   <arg name="byte_order" default="little" />
+  <!-- 是否启用心跳：true/false，默认 false -->
+  <arg name="enable_heartbeat" default="false" />
   
   <!-- Weld Command Node -->
   <!-- Subscribes to /weld_command topic and sends commands to robot -->
@@ -17,6 +19,7 @@
     <param name="robot_port" value="$(arg robot_port)" />
     <param name="debug" value="$(arg debug)" />
     <param name="byte_order" value="$(arg byte_order)" />
+    <param name="enable_heartbeat" value="$(arg enable_heartbeat)" />
   </node>
   
 </launch> 

@@ -32,6 +32,7 @@
  * POSSIBILITY OF SUCH DAMAGE.
  */
 
+#include <cstdint>
 #include <ros/ros.h>
 #include <fanuc_driver/WeldCommand.h>
 #include <std_msgs/Header.h>
@@ -40,6 +41,7 @@
 #include <arpa/inet.h>
 #include <unistd.h>
 #include <string.h>
+#include <errno.h>
 #include <algorithm>
 #include <cctype>
 
@@ -55,6 +57,8 @@ private:
     int sock_fd_;
     bool connected_;
     bool little_endian_;  // true: little-endian (default), false: big-endian
+    bool heartbeat_enabled_; // default false: disable heartbeat unless requested
+    std::mutex socket_mutex_;
     
     // ROS-Industrial packet structure for welding commands
     struct WeldCommandPacket {
@@ -102,6 +106,16 @@ public:
         std::transform(byte_order_param.begin(), byte_order_param.end(), byte_order_param.begin(), ::tolower);
         little_endian_ = (byte_order_param == "little" || byte_order_param == "le");
         ROS_INFO("Expecting %s-endian robot messages", little_endian_ ? "little" : "big");
+
+        // Heartbeat enable parameter (default false)
+        nh_.param<bool>("enable_heartbeat", heartbeat_enabled_, false);
+        if (heartbeat_enabled_) {
+            heartbeat_timer_ = public_nh_.createTimer(ros::Duration(3.0),
+                                             &FanucWeldCommandNode::heartbeatCallback, this);
+            ROS_INFO("Heartbeat enabled (3s)");
+        } else {
+            ROS_INFO("Heartbeat disabled");
+        }
         
         ROS_INFO("Fanuc Weld Command Node starting");
         ROS_INFO("Target robot: %s:%d", robot_ip_.c_str(), robot_port_);
@@ -110,10 +124,7 @@ public:
         command_sub_ = public_nh_.subscribe("/weld_command", 10, 
                                    &FanucWeldCommandNode::commandCallback, this);
         
-        // Start heartbeat timer (every 3 seconds)
-        heartbeat_timer_ = public_nh_.createTimer(ros::Duration(3.0), 
-                                         &FanucWeldCommandNode::heartbeatCallback, this);
-        
+
         ROS_INFO("Subscribed to /weld_command topic");
         ROS_INFO("Ready to send welding commands to robot");
     }
@@ -184,6 +195,7 @@ public:
         ROS_INFO("  jog_feed_cmd: %d", (int32_t)msg->jog_feed_cmd);
         ROS_INFO("  jog_retract_cmd: %d", (int32_t)msg->jog_retract_cmd);
         
+        std::lock_guard<std::mutex> lk(socket_mutex_);
         if (!connect()) {
             ROS_WARN("Cannot send command - not connected to robot");
             return;
@@ -216,10 +228,13 @@ public:
         packet.jog_feed_cmd    = static_cast<uint32_t>(msg->jog_feed_cmd);
         packet.jog_retract_cmd = static_cast<uint32_t>(msg->jog_retract_cmd);
 
-        // Convert to big-endian if required
+        // Build send buffer (convert to big-endian in a separate buffer to avoid
+        // corrupting host-order fields that might be reused later).
+        uint8_t send_buf[sizeof(packet)];
+        std::memcpy(send_buf, &packet, sizeof(packet));
         if (!little_endian_)
         {
-            uint32_t* p = reinterpret_cast<uint32_t*>(&packet);
+            uint32_t* p = reinterpret_cast<uint32_t*>(send_buf);
             size_t cnt = sizeof(packet) / sizeof(uint32_t);
             for (size_t i = 0; i < cnt; ++i)
             {
@@ -240,7 +255,7 @@ public:
         ROS_INFO("  jog_retract_cmd: %d", (int32_t)packet.jog_retract_cmd);
 
         // Send packet
-        ssize_t bytes_sent = send(sock_fd_, &packet, sizeof(packet), 0);
+        ssize_t bytes_sent = send(sock_fd_, send_buf, sizeof(packet), 0);
         if (bytes_sent != sizeof(packet)) {
             ROS_ERROR("Failed to send complete packet: sent %zd of %zu bytes", 
                       bytes_sent, sizeof(packet));
@@ -260,17 +275,31 @@ public:
             uint32_t seq_nr;
         } reply;
         
-        // Robustly read exactly sizeof(reply) bytes
+        // Non-blocking read of acknowledgment (avoid blocking the callback)
         size_t expected_bytes = sizeof(reply);
         size_t received_total = 0;
-        while (received_total < expected_bytes) {
-            ssize_t r = recv(sock_fd_, ((char*)&reply) + received_total, expected_bytes - received_total, 0);
-            if (r <= 0) {
-                ROS_WARN("Failed to receive acknowledgment from robot (recv returned %zd)", r);
+        while (received_total < expected_bytes)
+        {
+            ssize_t r = recv(sock_fd_, ((char*)&reply) + received_total,
+                             expected_bytes - received_total, MSG_DONTWAIT);
+            if (r < 0)
+            {
+                if (errno == EAGAIN || errno == EWOULDBLOCK)
+                    break;  // No more data available right now
+                ROS_WARN("recv() error while waiting for ACK: %s", strerror(errno));
                 disconnect();
                 break;
             }
-            received_total += static_cast<size_t>(r);
+            else if (r == 0)
+            {
+                ROS_WARN("Connection closed by robot while waiting for ACK");
+                disconnect();
+                break;
+            }
+            else
+            {
+                received_total += static_cast<size_t>(r);
+            }
         }
 
         if (!little_endian_)
@@ -296,6 +325,7 @@ public:
 
     void heartbeatCallback(const ros::TimerEvent&)
     {
+        std::lock_guard<std::mutex> lk(socket_mutex_);
         if (!connected_) {
             return; // No connection, skip heartbeat
         }
@@ -327,19 +357,39 @@ public:
         packet.jog_feed_cmd = NO_CHANGE;
         packet.jog_retract_cmd = NO_CHANGE;
         
-        // Convert to big-endian if required
+        // Build send buffer (convert to big-endian if required)
+        uint8_t send_buf[sizeof(packet)];
+        std::memcpy(send_buf, &packet, sizeof(packet));
         if (!little_endian_)
         {
-            uint32_t* p = reinterpret_cast<uint32_t*>(&packet);
+            uint32_t* p = reinterpret_cast<uint32_t*>(send_buf);
             size_t cnt = sizeof(packet) / sizeof(uint32_t);
             for (size_t i = 0; i < cnt; ++i) { p[i] = htonl(p[i]); }
         }
 
-        // Send heartbeat packet (no need to wait for reply)
-        ssize_t bytes_sent = send(sock_fd_, &packet, sizeof(packet), 0);
+        // Send heartbeat packet
+        ssize_t bytes_sent = send(sock_fd_, send_buf, sizeof(packet), 0);
         if (bytes_sent != sizeof(packet)) {
             ROS_WARN("Failed to send heartbeat packet, disconnecting");
             disconnect();
+            return;
+        }
+
+        // Try to read ACK for heartbeat (non-blocking)
+        struct {
+            uint32_t length;
+            uint32_t msg_type;
+            uint32_t comm_type;
+            uint32_t reply_type;
+            uint32_t seq_nr;
+        } hb_reply;
+        size_t expected_bytes = sizeof(hb_reply);
+        size_t received_total = 0;
+        while (received_total < expected_bytes) {
+            ssize_t r = recv(sock_fd_, ((char*)&hb_reply)+received_total,
+                             expected_bytes-received_total, MSG_DONTWAIT);
+            if (r <= 0) break; // nothing to read now
+            received_total += static_cast<size_t>(r);
         }
     }
 };
