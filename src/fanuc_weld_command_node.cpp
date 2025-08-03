@@ -44,6 +44,8 @@
 #include <errno.h>
 #include <algorithm>
 #include <cctype>
+#include <functional>
+#include <signal.h>
 
 class FanucWeldCommandNode
 {
@@ -127,6 +129,7 @@ public:
 
         ROS_INFO("Subscribed to /weld_command topic");
         ROS_INFO("Ready to send welding commands to robot");
+
     }
     
     ~FanucWeldCommandNode()
@@ -175,11 +178,21 @@ public:
     void disconnect()
     {
         if (sock_fd_ >= 0) {
+            // Gracefully shut down the TCP socket first so the robot immediately
+            // receives a FIN / RST and the KAREL program can exit its read loop.
+            ::shutdown(sock_fd_, SHUT_RDWR);
             close(sock_fd_);
             sock_fd_ = -1;
         }
         connected_ = false;
     }
+
+    // Called automatically by ros::on_shutdown
+    //void onShutdown()
+    //{
+    //    std::lock_guard<std::mutex> lk(socket_mutex_);
+    //    disconnect();
+    //}
     
     void commandCallback(const fanuc_driver::WeldCommand::ConstPtr& msg)
     {
@@ -401,7 +414,13 @@ int main(int argc, char** argv)
     FanucWeldCommandNode node;
     
     ROS_INFO("Fanuc Weld Command Node is running...");
-    ros::spin();
+
+    ros::Rate loop_rate(10);  // 10 Hz
+    while (ros::ok())
+    {
+        ros::spinOnce();
+        loop_rate.sleep();
+    }
     
     return 0;
 } 

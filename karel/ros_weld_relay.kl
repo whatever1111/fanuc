@@ -472,14 +472,21 @@ VAR
 	bytes_avail : INTEGER
 	stat_check : INTEGER
 BEGIN
+	bytes_avail = 0
+    stat_check  = 0
+	
 	-- DEBUG: Log function entry
 	log_info(LOG_PFIX + 'iwd_dslice_cmd: Entered')
 
 	-- Check if data is available without blocking  
 	-- Note: We need to read the full packet structure properly
 	BYTES_AHEAD(fdesc, bytes_avail, stat_check)
-	log_info_a(LOG_PFIX + 'BYTES_AHEAD avail:', bytes_avail)
-	log_info_a(LOG_PFIX + 'BYTES_AHEAD status:', stat_check)
+	IF (NOT UNINIT(bytes_avail)) THEN
+		log_info_a(LOG_PFIX + 'BYTES_AHEAD avail:', bytes_avail)
+	ENDIF
+	IF (NOT UNINIT(stat_check)) THEN
+		log_info_a(LOG_PFIX + 'BYTES_AHEAD status:', stat_check)
+	ENDIF
 
 	-- Detect socket errors / disconnects
 	IF (stat_check <> 0) THEN
