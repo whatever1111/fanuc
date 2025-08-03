@@ -48,22 +48,27 @@
 ### 状态信号 (焊机 -> 机器人 -> ROS)
 ```karel
 -- Default I/O mappings in KAREL program
+DEF_EWM_ERR_GI   = 1   -- GI[1] for EWM error status word (raw)
 DEF_VOLT_GI      = 2   -- GI[2] for actual voltage (raw value)
 DEF_CURR_GI      = 3   -- GI[3] for actual current (raw value)
+DEF_WFS_GI       = 4   -- GI[4] for wire feed speed (raw value)
+DEF_MOTOR_CURR_GI= 5   -- GI[5] for motor current (raw value)
 DEF_ARC_DI       = 249 -- DI[249] for arc detection
 DEF_POWER_ERR_DI = 252 -- DI[252] for power error
 DEF_DEPOS_DI     = 251 -- DI[251] for deposition detection
+DEF_WARNING_GI   = 6   -- GI[6] for warning status
 ```
 
 ### 实际读取的数据
+- **电弧状态**: `DIN[cfg_.arc_di]` (DI[249])
+- **电源错误**: `DIN[cfg_.power_err_di]` (DI[252]) 
+- **熔敷检测**: `DIN[cfg_.depos_di]` (DI[251])
+- **EWM错误状态字**: `GIN[cfg_.ewm_err_gi]` (GI[1])
+- **警告状态字**: `GIN[cfg_.warning_gi]` (GI[6])
 - **实际电压**: `GIN[cfg_.volt_gi]` (GI[2])
 - **实际电流**: `GIN[cfg_.curr_gi]` (GI[3])
-- **电弧状态**: `DIN[cfg_.arc_di]` (DI[249])
-- **电源错误**: `DIN[cfg_.power_err_di]` (DI[252])
-- **熔敷检测**: `DIN[cfg_.depos_di]` (DI[251])
-- **就绪状态**: 固定为 `TRUE` (测试用)
-- **粘丝错误**: 固定为 `FALSE` (测试用)
-- **送丝速度**: 固定为 `0` (当前版本未使用)
+- **送丝速度**: `GIN[cfg_.wfs_gi]` (GI[4])
+- **电机电流**: `GIN[cfg_.motor_curr_gi]` (GI[5])
 
 ## 使用步骤
 
