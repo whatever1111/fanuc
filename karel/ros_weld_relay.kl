@@ -81,6 +81,7 @@ TYPE
 		s_tcp_nr     : INTEGER  -- TCP port to listen on
 		s_tag_nr     : INTEGER  -- server TAG number to use
 		um_clear     : BOOLEAN  -- clear user menu on start
+		hb_en        : BOOLEAN  -- enable heartbeat & idle timeout
 		-- Welding I/O mappings for Group Outputs (GO)
 		wire_go      : INTEGER  -- GO for target wire feed speed
 		correction_go: INTEGER  -- GO for correction value
@@ -384,13 +385,15 @@ BEGIN
 				-- No command received, increment idle counter
 				idle_counter_ = idle_counter_ + 1
 
-				-- If idle for too long (e.g. 10 seconds), assume client has disconnected
-				IF (idle_counter_ > (10 * cfg_.loop_hz)) THEN
-					log_error(LOG_PFIX + 'Idle timeout, assuming disconnect.')
-					GOTO exit_discon
+				-- Idle-timeout only when heartbeat enabled
+				IF (cfg_.hb_en) THEN
+					IF (idle_counter_ > (10 * cfg_.loop_hz)) THEN
+						log_error(LOG_PFIX + 'Idle timeout, assuming disconnect.')
+						GOTO exit_discon
+					ENDIF
 				ENDIF
 
-				-- no packets waiting, sleep a little (1/T)
+				-- sleep 1/T
 				DELAY sleep_time_
 			ENDIF
 
@@ -436,6 +439,7 @@ BEGIN
 	IF (UNINIT(cfg.s_tcp_nr )) THEN cfg.s_tcp_nr  = WELD_TCP_P   ; a__ = TRUE; ENDIF
 	IF (UNINIT(cfg.s_tag_nr )) THEN cfg.s_tag_nr  = WELD_TAG     ; a__ = TRUE; ENDIF
 	IF (UNINIT(cfg.um_clear )) THEN cfg.um_clear  = TRUE         ; a__ = TRUE; ENDIF
+	IF (UNINIT(cfg.hb_en    )) THEN cfg.hb_en    = FALSE        ; a__ = TRUE; ENDIF
 	-- Group Output mappings (GO)
 	IF (UNINIT(cfg.prog_num_go )) THEN cfg.prog_num_go  = DEF_PROG_NUM_GO  ; a__ = TRUE; ENDIF
 	IF (UNINIT(cfg.wire_go     )) THEN cfg.wire_go      = DEF_WIRE_GO       ; a__ = TRUE; ENDIF
@@ -508,14 +512,23 @@ BEGIN
 	log_info(LOG_PFIX + 'Reading packet data...')
 
 	-- KAREL does not support reading STRUCTUREs directly. Must read field by field.
-	-- Read header fields
-	READ fdesc (pkt.hdr_.length_)
-	READ fdesc (pkt.hdr_.msg_type_)
-	READ fdesc (pkt.hdr_.comm_type_)
-	READ fdesc (pkt.hdr_.reply_type_)
-	
-	-- CRITICAL FIX: Read the missing seq_nr_ field!
-	READ fdesc (pkt.seq_nr_)
+	-- Read header fields (length,msg_type,comm_type,reply_type) + seq_nr in one call
+	READ fdesc (
+            pkt.hdr_.length_,
+            pkt.hdr_.msg_type_,
+            pkt.hdr_.comm_type_,
+            pkt.hdr_.reply_type_,
+            pkt.seq_nr_,
+            pkt.weld_cmd_data_.target_wire_spd,
+            pkt.weld_cmd_data_.correction_val,
+            pkt.weld_cmd_data_.dyn_setting,
+            pkt.weld_cmd_data_.operation_mode,
+            pkt.weld_cmd_data_.std_pulse_val,
+            pkt.weld_cmd_data_.program_number,
+            pkt.weld_cmd_data_.arc_start_cmd,
+            pkt.weld_cmd_data_.gas_control,
+            pkt.weld_cmd_data_.jog_feed_cmd,
+            pkt.weld_cmd_data_.jog_retract_cmd)
 	
 	-- DEBUG: Log header info
 	log_info_a(LOG_PFIX + 'Packet length:', pkt.hdr_.length_)
@@ -523,16 +536,7 @@ BEGIN
 	log_info_a(LOG_PFIX + 'Sequence nr:', pkt.seq_nr_)
 	
 	-- Read all weld_cmd_data_t payload fields
-	READ fdesc (pkt.weld_cmd_data_.target_wire_spd)
-	READ fdesc (pkt.weld_cmd_data_.correction_val)
-	READ fdesc (pkt.weld_cmd_data_.dyn_setting)
-	READ fdesc (pkt.weld_cmd_data_.operation_mode)
-	READ fdesc (pkt.weld_cmd_data_.std_pulse_val)
-	READ fdesc (pkt.weld_cmd_data_.program_number)
-	READ fdesc (pkt.weld_cmd_data_.arc_start_cmd)
-	READ fdesc (pkt.weld_cmd_data_.gas_control)
-	READ fdesc (pkt.weld_cmd_data_.jog_feed_cmd)
-	READ fdesc (pkt.weld_cmd_data_.jog_retract_cmd)
+	-- payload read merged above
 
 	-- check for read errors
 	IF IO_STATUS(fdesc) <> 0 THEN
@@ -700,27 +704,19 @@ VAR
 BEGIN
 	stat__ = 0
 
-	-- Write header fields one-by-one to ensure correctness
-	WRITE fdesc (pkt.length_)
+	-- Write full header (5 x 4-byte INT) in a single binary WRITE for efficiency
+	-- Write all 5 INT fields in one go (length, msg_type, comm_type, reply_type, seq_nr)
+	WRITE fdesc (
+				pkt.length_, 
+				pkt.msg_type_, 
+				pkt.comm_type_, 
+				pkt.reply_type_, 
+				pkt.seq_nr_)
 	stat__ = IO_STATUS(fdesc)
 	IF stat__ <> 0 THEN RETURN (-stat__); ENDIF
-
-	WRITE fdesc (pkt.msg_type_)
-	stat__ = IO_STATUS(fdesc)
-	IF stat__ <> 0 THEN RETURN (-stat__); ENDIF
-
-	WRITE fdesc (pkt.comm_type_)
-	stat__ = IO_STATUS(fdesc)
-	IF stat__ <> 0 THEN RETURN (-stat__); ENDIF
-
-	WRITE fdesc (pkt.reply_type_)
-	stat__ = IO_STATUS(fdesc)
-	IF stat__ <> 0 THEN RETURN (-stat__); ENDIF
-
-	-- Write sequence number
-	WRITE fdesc (pkt.seq_nr_)
-	stat__ = IO_STATUS(fdesc)
-	IF stat__ <> 0 THEN RETURN (-stat__); ENDIF
+	
+	-- ensure data is sent immediately
+	-- FLUSH fdesc
 
 	RETURN (0)
 END iwd_srlise_reply

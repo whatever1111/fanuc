@@ -182,6 +182,17 @@ install(TARGETS
   DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
 )
 
+# Install Python scripts so they can be invoked with rosrun
+install(PROGRAMS
+  scripts/byte_order_analyzer.py
+  scripts/debug_weld_state.py
+  scripts/raw_message_capture.py
+  scripts/test_debug_tools.py
+  scripts/test_weld_state.py
+  scripts/weld_command_test.py
+  scripts/weld_state_validator.py
+  DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION})
+
 install(DIRECTORY karel launch tpe
   DESTINATION ${CATKIN_PACKAGE_SHARE_DESTINATION})
 
