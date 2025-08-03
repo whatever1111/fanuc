@@ -55,7 +55,7 @@ const int WELD_STATE_MSG_TYPE = 15;
 // Scaling factors from EWM manual
 const double VOLTAGE_SCALE = 100.0 / 32767.0;   // Raw to Volts
 const double CURRENT_SCALE = 1000.0 / 32767.0;  // Raw to Amperes
-//const double WIRE_SPEED_SCALE = 40.0 / 32767.0; // Raw to m/min
+const double WIRE_SPEED_SCALE = 40.0 / 32767.0;  // Raw to m/min
 
 class FanucWeldStateNodeSimple
 {
@@ -254,19 +254,19 @@ private:
         if (debug_) ROS_DEBUG("Discarded terminator byte: 0x%02x", peek_byte);
       }
     }
-    else if (length == 49 && msg_type == 15 && comm_type == 1)
+    else if (length == 53 && msg_type == 15 && comm_type == 1)
     {
       // Format 2: Standard Simple Message format with sequence number
-      if (debug_) ROS_DEBUG("Receiving standard format (length=49)");
+      if (debug_) ROS_DEBUG("Receiving standard format (length=53)");
       
-      // Receive remaining 36 bytes (4 bytes sequence + 32 bytes payload)
-      uint8_t remaining_buf[36];
-      if (!receiveExactly(remaining_buf, 36))
+      // Receive remaining 40 bytes (4 bytes sequence + 36 bytes payload)
+      uint8_t remaining_buf[40];
+      if (!receiveExactly(remaining_buf, 40))
       {
         return false;
       }
       
-      // Parse payload (skip sequence number, use remaining 32 bytes)
+      // Parse payload (skip sequence number, use remaining 36 bytes)
       payload_buf = &remaining_buf[4];
       
       // Optionally remove a single terminator byte (CR or LF) that may follow
@@ -282,7 +282,7 @@ private:
     }
     else
     {
-      ROS_WARN("Invalid header - Expected: (Length=32 or 49), Type=15, Comm=1");
+      ROS_WARN("Invalid header - Expected: (Length=32 or 53), Type=15, Comm=1");
       if (debug_)
       {
         ROS_WARN("Received: Length=%u, Type=%u, Comm=%u, Reply=%u", length, msg_type, comm_type, reply_type);
@@ -294,7 +294,7 @@ private:
     ByteArray data;
     
     // Load data in normal order for FIFO unload
-    for (int i = 0; i < 8; i++)
+    for (int i = 0; i < 9; i++)
     {
       int32_t value = *((int32_t*)&payload_buf[i * 4]);
       data.load(value);
@@ -335,7 +335,7 @@ private:
     // Get the raw data buffer
     ByteArray data = const_cast<SimpleMessage&>(msg).getData();
     
-    if (data.getBufferSize() < 32)
+    if (data.getBufferSize() < 36)
     {
       ROS_WARN("Insufficient data size: %u bytes", data.getBufferSize());
       return;
@@ -345,15 +345,15 @@ private:
     std::vector<char> buffer;
     data.copyTo(buffer);
     
-    if (buffer.size() < 32)
+    if (buffer.size() < 36)
     {
       ROS_ERROR("Buffer size too small: %lu bytes", buffer.size());
       return;
     }
     
     // Parse weld data (Little Endian)
-    int32_t weld_ints[8];
-    for (std::size_t i = 0; i < 8; i++)
+    int32_t weld_ints[9];
+    for (std::size_t i = 0; i < 9; i++)
     {
       weld_ints[i] = *reinterpret_cast<int32_t*>(&buffer[i * 4]);
     }
@@ -361,29 +361,31 @@ private:
     if (debug_)
     {
       ROS_INFO("Raw weld data:");
-      ROS_INFO("  arc_ok: %d, ready: %d, stick_err: %d, power_err: %d", 
-               weld_ints[0], weld_ints[1], weld_ints[2], weld_ints[3]);
-      ROS_INFO("  depos_di: %d, voltage: %d, current: %d, wire_spd: %d",
-               weld_ints[4], weld_ints[5], weld_ints[6], weld_ints[7]);
+      ROS_INFO("  arc_ok: %d, power_err: %d, depos_di: %d", 
+               weld_ints[0], weld_ints[1], weld_ints[2]);
+      ROS_INFO("  ewm_err: %d, warn: %d, voltage: %d, current: %d, wire_spd: %d, motor_curr: %d",
+               weld_ints[3], weld_ints[4], weld_ints[5], weld_ints[6], weld_ints[7], weld_ints[8]);
     }
     
     fanuc_driver::WeldState weld_msg;
     
     // Convert to ROS message
-    weld_msg.arc_ok = (weld_ints[0] != 0);
-    weld_msg.ready = (weld_ints[1] != 0);
-    weld_msg.stick_err = (weld_ints[2] != 0);
-    weld_msg.power_err = (weld_ints[3] != 0);
-    weld_msg.depos_di = (weld_ints[4] != 0);
-    weld_msg.act_voltage = static_cast<int16_t>(weld_ints[5]);
-    weld_msg.act_current = static_cast<int16_t>(weld_ints[6]);
-    weld_msg.act_wire_spd = static_cast<int16_t>(weld_ints[7]);
+    weld_msg.arc_ok        = (weld_ints[0] != 0);
+    
+    weld_msg.power_err     = (weld_ints[1] != 0);
+    weld_msg.depos_di      = (weld_ints[2] != 0);
+    weld_msg.ewm_err       = static_cast<int16_t>(weld_ints[3]);
+    weld_msg.warning_state = static_cast<int16_t>(weld_ints[4]);
+    weld_msg.act_voltage   = static_cast<int16_t>(weld_ints[5]);
+    weld_msg.act_current   = static_cast<int16_t>(weld_ints[6]);
+    weld_msg.act_wire_spd  = static_cast<int16_t>(weld_ints[7]);
+    weld_msg.motor_current = static_cast<int16_t>(weld_ints[8]);
     
     if (debug_)
     {
-      ROS_INFO("Welding State: arc_ok=%s, ready=%s, voltage=%.1fV, current=%.0fA",
+      ROS_INFO("Welding State: arc_ok=%s, power_err=%s, voltage=%.1fV, current=%.0fA",
                weld_msg.arc_ok ? "TRUE" : "FALSE",
-               weld_msg.ready ? "TRUE" : "FALSE",
+               weld_msg.power_err ? "TRUE" : "FALSE",
                weld_msg.act_voltage * VOLTAGE_SCALE,
                weld_msg.act_current * CURRENT_SCALE);
     }
