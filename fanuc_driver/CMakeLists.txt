@@ -191,6 +191,7 @@ install(PROGRAMS
   scripts/test_weld_state.py
   scripts/weld_command_test.py
   scripts/weld_state_validator.py
+  scripts/weld_control_freq_test.py
   DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION})
 
 install(DIRECTORY karel launch tpe
