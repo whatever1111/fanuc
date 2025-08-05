@@ -194,28 +194,43 @@ public:
         continue;
       }
       
-      // Receive sequence number (4 bytes)
-      uint8_t seq_buf[4];
-      if (!receiveExactly(seq_buf, 4))
+      // Receive the remaining <length> bytes of this message
+      std::vector<uint8_t> remainder(length);
+      if (!receiveExactly(remainder.data(), length))
       {
-        ROS_ERROR("Failed to receive sequence number");
+        ROS_ERROR("Failed to receive remaining %u bytes", length);
         continue;
       }
-      uint32_t seq_nr = readUint32(&seq_buf[0]);
-      
-      // Receive payload (configurable size)
-      std::vector<uint8_t> payload_buf(payload_size_bytes_);
-      if (!receiveExactly(payload_buf.data(), payload_size_bytes_))
+
+      // Determine whether sequence number is present
+      std::size_t payload_offset = 0;
+      uint32_t seq_nr = 0;
+      if (length == payload_size_bytes_ || length == payload_size_bytes_ + 1)
       {
-        ROS_ERROR("Failed to receive payload");
+        // payload only (+optional CR) – no seq number
+        payload_offset = 0;
+      }
+      else if (length == payload_size_bytes_ + 4 || length == payload_size_bytes_ + 5)
+      {
+        // first 4 bytes = seq number, rest is payload (+optional CR)
+        seq_nr = readUint32(&remainder[0]);
+        payload_offset = 4;
+      }
+      else
+      {
+        ROS_WARN("Unsupported message length %u (payload %zu) – skipping", length, payload_size_bytes_);
         continue;
       }
+
+      const uint8_t* payload_ptr = &remainder[payload_offset];
+      // (Ignore possible trailing CR/LF; payload_size_bytes_ ensures we don't read it)
+      std::vector<uint8_t> payload_buf(payload_ptr, payload_ptr + payload_size_bytes_);
       
-      // Parse weld data (Little Endian)
+      // Parse weld data (endian-aware)
       std::vector<int32_t> weld_ints(payload_fields_);
       for (int i = 0; i < payload_fields_; i++)
       {
-        weld_ints[i] = readInt32(&payload_buf[i * 4]);
+        weld_ints[i] = readInt32(payload_ptr + i * 4);
       }
       
       if (debug_)
