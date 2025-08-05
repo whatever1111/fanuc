@@ -191,7 +191,7 @@ BEGIN
 	USING weld_pkt_out_ DO
 		-- Standard Simple Message format: msg_type(4) + comm_type(4) + reply_type(4) + seq_nr(4) + payload(32) + CR(1) = 49 bytes
 		-- length field contains everything after length field itself
-		hdr_.length_     = 53  -- 4+4+4+4+(11*4)+1
+		hdr_.length_     = 49  -- 4+4+4+4+(9*4)+1
 		hdr_.msg_type_   = RI_MT_WELDST
 		hdr_.comm_type_  = RI_CT_TOPIC
 		hdr_.reply_type_ = RI_RT_INVAL
