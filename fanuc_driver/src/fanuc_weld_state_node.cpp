@@ -223,15 +223,28 @@ public:
       }
 
       const uint8_t* payload_ptr = &remainder[payload_offset];
-      // (Ignore possible trailing CR/LF; payload_size_bytes_ ensures we don't read it)
-      std::vector<uint8_t> payload_buf(payload_ptr, payload_ptr + payload_size_bytes_);
-      
-      // Parse weld data (endian-aware)
-      std::vector<int32_t> weld_ints(payload_fields_);
-      for (int i = 0; i < payload_fields_; i++)
+      std::size_t available_payload_bytes = length - payload_offset;
+      // Treat optional single terminator byte as non-payload if present
+      if (available_payload_bytes % 4 == 1)
+      {
+        available_payload_bytes -= 1; // drop CR/LF
+      }
+
+      std::size_t ints_in_msg = available_payload_bytes / 4;
+      if (ints_in_msg < 9)
+      {
+        ROS_WARN("Payload too small (%zu ints) – skipping", ints_in_msg);
+        continue;
+      }
+
+      // Parse first 9 ints that correspond to ROS message definition
+      std::vector<int32_t> weld_ints(9);
+      for (std::size_t i = 0; i < 9; ++i)
       {
         weld_ints[i] = readInt32(payload_ptr + i * 4);
       }
+      
+
       
       if (debug_)
       {
