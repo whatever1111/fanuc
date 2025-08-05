@@ -325,6 +325,7 @@ BEGIN
 	IF (UNINIT(cfg.s_tcp_nr )) THEN cfg.s_tcp_nr  = WELD_TCP_P   ; a__ = TRUE; ENDIF
 	IF (UNINIT(cfg.s_tag_nr )) THEN cfg.s_tag_nr  = WELD_TAG     ; a__ = TRUE; ENDIF
 	IF (UNINIT(cfg.um_clear )) THEN cfg.um_clear  = TRUE         ; a__ = TRUE; ENDIF
+	IF (UNINIT(cfg.checked  )) THEN cfg.checked   = FALSE        ; a__ = TRUE; ENDIF
 	-- I/O mappings
 	IF (UNINIT(cfg.volt_gi     )) THEN cfg.volt_gi      = DEF_VOLT_GI     ; a__ = TRUE; ENDIF
 	IF (UNINIT(cfg.curr_gi     )) THEN cfg.curr_gi      = DEF_CURR_GI     ; a__ = TRUE; ENDIF
@@ -335,7 +336,7 @@ BEGIN
 	IF (UNINIT(cfg.wfs_gi     )) THEN cfg.wfs_gi      = DEF_WFS_GI      ; a__ = TRUE; ENDIF
 	IF (UNINIT(cfg.motor_curr_gi)) THEN cfg.motor_curr_gi = DEF_MOTOR_CURR_GI ; a__ = TRUE; ENDIF
 	IF (UNINIT(cfg.warning_gi )) THEN cfg.warning_gi  = DEF_WARNING_GI  ; a__ = TRUE; ENDIF
-	IF (UNINIT(cfg.checked  )) THEN cfg.checked   = FALSE        ; a__ = TRUE; ENDIF
+	
 
 	-- make sure user has checked configuration
 	IF ((NOT cfg.checked) OR a__) THEN RETURN (CFG_NOTDONE); ENDIF
