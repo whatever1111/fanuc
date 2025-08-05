@@ -195,22 +195,30 @@ public:
       }
       
       // Receive the remaining <length> bytes of this message
-      std::vector<uint8_t> remainder(length);
-      if (!receiveExactly(remainder.data(), length))
+      // 'length' counts everything AFTER this 4-byte field, which includes
+      // msg_type, comm_type, reply_type (already read: 12 bytes).
+      if (length < 12)
       {
-        ROS_ERROR("Failed to receive remaining %u bytes", length);
+        ROS_WARN("Length field too small (%u) – skipping", length);
+        continue;
+      }
+      uint32_t remaining_bytes = length - 12;  // bytes still to read
+      std::vector<uint8_t> remainder(remaining_bytes);
+      if (!receiveExactly(remainder.data(), remaining_bytes))
+      {
+        ROS_ERROR("Failed to receive remaining %u bytes", remaining_bytes);
         continue;
       }
 
       // Determine whether sequence number is present
       std::size_t payload_offset = 0;
       uint32_t seq_nr = 0;
-      if (length == payload_size_bytes_ || length == payload_size_bytes_ + 1)
+      if (remaining_bytes == payload_size_bytes_ || remaining_bytes == payload_size_bytes_ + 1)
       {
         // payload only (+optional CR) – no seq number
         payload_offset = 0;
       }
-      else if (length == payload_size_bytes_ + 4 || length == payload_size_bytes_ + 5)
+      else if (remaining_bytes == payload_size_bytes_ + 4 || remaining_bytes == payload_size_bytes_ + 5)
       {
         // first 4 bytes = seq number, rest is payload (+optional CR)
         seq_nr = readUint32(&remainder[0]);
@@ -218,7 +226,7 @@ public:
       }
       else
       {
-        ROS_WARN("Unsupported message length %u (payload %zu) – skipping", length, payload_size_bytes_);
+        ROS_WARN("Unsupported message length %u (after hdr %u) – skipping", remaining_bytes, payload_size_bytes_);
         continue;
       }
 
