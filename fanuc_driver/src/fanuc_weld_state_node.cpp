@@ -27,6 +27,7 @@ private:
   
   // Protocol parameters (loaded from ROS params / launch file)
   uint32_t expected_standard_length_;   // e.g. 61
+  bool dump_raw_;                       // print full raw message in hex
   uint32_t expected_msg_type_;          // e.g. 15
   uint32_t expected_comm_type_;         // e.g. 1 (RI_CT_TOPIC or SVCREQ depending on sender)
   int      payload_fields_;             // number of Int32 values in payload (default 9)
@@ -42,7 +43,7 @@ public:
 
     // Protocol tuning parameters (can be set from launch file to avoid hard-coded magic numbers)
     int tmp_int = 0;
-    nh_.param<int>("expected_standard_length", tmp_int, 61);
+    nh_.param<int>("expected_standard_length", tmp_int, 53);
     expected_standard_length_ = static_cast<uint32_t>(tmp_int);
     nh_.param<int>("expected_msg_type", tmp_int, 15);
     expected_msg_type_ = static_cast<uint32_t>(tmp_int);
@@ -50,6 +51,7 @@ public:
     expected_comm_type_ = static_cast<uint32_t>(tmp_int);
     nh_.param<int>("payload_fields", payload_fields_, 9);
     payload_size_bytes_ = static_cast<std::size_t>(payload_fields_) * sizeof(int32_t);
+    nh_.param<bool>("dump_raw", dump_raw_, false);
 
     // Byte order parameter: "little" (default) or "big"
     std::string byte_order_param;
@@ -174,6 +176,25 @@ public:
         ROS_INFO("Message #%d - Length: %u, Type: %u, Comm: %u, Reply: %u", 
                  msg_count, length, msg_type, comm_type, reply_type);
       }
+
+      // Dump raw message bytes if requested
+      if (dump_raw_)
+      {
+        std::vector<uint8_t> raw(16 + length);
+        std::memcpy(raw.data(), header_buf, 16);
+        // peek remaining bytes without removing from socket
+        ssize_t peeked = recv(sock_fd_, raw.data() + 16, length, MSG_PEEK);
+        if (peeked > 0)
+        {
+          std::ostringstream oss;
+          oss << "RAW(" << (16 + peeked) << "):";
+          for (size_t i = 0; i < 16 + (size_t)peeked; ++i)
+          {
+            oss << ' ' << std::hex << std::setw(2) << std::setfill('0') << int(raw[i]);
+          }
+          ROS_INFO_STREAM(oss.str());
+        }
+      }
       
       // Basic header validation using configurable parameters
       if (msg_type != expected_msg_type_ || comm_type != expected_comm_type_ ||
@@ -210,46 +231,67 @@ public:
         continue;
       }
 
-      // Determine whether sequence number is present
+      // Analyse remainder for optional seq_nr (4B) and at most one trailing CR (0x0d or 0x0a)
+      // Acceptable data sizes after trimming CR/LF:
+      // 36  = payload only (9×INT)
+      // 40  = seq(4)+payload
+      // If there is a single trailing CR (0x0d or 0x0a) add +1 → 37 / 41
+
       std::size_t payload_offset = 0;
       uint32_t seq_nr = 0;
-      if (remaining_bytes == payload_size_bytes_ || remaining_bytes == payload_size_bytes_ + 1)
+
+      // First remove max 2 trailing CR/LF bytes (not counted in length field on some robots)
+      std::size_t trim_bytes = 0;
+      while (trim_bytes < 2 && !remainder.empty())
       {
-        // payload only (+optional CR) – no seq number
+        uint8_t last = remainder[remainder.size() - 1 - trim_bytes];
+        if (last == '\r' || last == '\n')
+          ++trim_bytes;
+        else
+          break;
+      }
+      std::size_t data_bytes = remaining_bytes - trim_bytes;
+
+      if (data_bytes == payload_size_bytes_ || data_bytes == payload_size_bytes_ + 1) // payload (+optional CR)
+      {
         payload_offset = 0;
       }
-      else if (remaining_bytes == payload_size_bytes_ + 4 || remaining_bytes == payload_size_bytes_ + 5)
+      else if (data_bytes == payload_size_bytes_ + 4 || data_bytes == payload_size_bytes_ + 5) // seq + payload (+optional CR)
       {
-        // first 4 bytes = seq number, rest is payload (+optional CR)
         seq_nr = readUint32(&remainder[0]);
         payload_offset = 4;
       }
       else
       {
-        ROS_WARN("Unsupported message length %u (after hdr %u) – skipping", remaining_bytes, payload_size_bytes_);
+        ROS_WARN("Unexpected data bytes %zu (accept %zu/%zu/%zu/%zu) – skipping", data_bytes,
+                 payload_size_bytes_, payload_size_bytes_ + 1,
+                 payload_size_bytes_ + 4, payload_size_bytes_ + 5);
         continue;
       }
 
       const uint8_t* payload_ptr = &remainder[payload_offset];
-      std::size_t available_payload_bytes = length - payload_offset;
-      // Treat optional single terminator byte as non-payload if present
-      if (available_payload_bytes % 4 == 1)
-      {
-        available_payload_bytes -= 1; // drop CR/LF
-      }
+      std::size_t available_payload_bytes = data_bytes - payload_offset;
 
+      // Parse payload_fields_ ints
       std::size_t ints_in_msg = available_payload_bytes / 4;
-      if (ints_in_msg < 9)
+      if (ints_in_msg < static_cast<std::size_t>(payload_fields_))
       {
         ROS_WARN("Payload too small (%zu ints) – skipping", ints_in_msg);
         continue;
       }
-
-      // Parse first 9 ints that correspond to ROS message definition
-      std::vector<int32_t> weld_ints(9);
-      for (std::size_t i = 0; i < 9; ++i)
-      {
+      std::vector<int32_t> weld_ints(payload_fields_);
+      for (int i = 0; i < payload_fields_; ++i)
         weld_ints[i] = readInt32(payload_ptr + i * 4);
+
+      // consume any leftover CR/LF still in socket (not counted in length)
+      while (true)
+      {
+        uint8_t peek;
+        ssize_t r = recv(sock_fd_, &peek, 1, MSG_PEEK | MSG_DONTWAIT);
+        if (r == 1 && (peek == '\r' || peek == '\n'))
+          recv(sock_fd_, &peek, 1, 0); // discard
+        else
+          break;
       }
       
 
