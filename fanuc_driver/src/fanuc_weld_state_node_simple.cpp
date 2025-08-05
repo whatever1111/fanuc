@@ -43,6 +43,8 @@
 #include <unistd.h>
 #include <cstring>
 #include <vector>
+#include <algorithm>
+#include <cctype>
 #include <simple_message/simple_message.h>
 #include <simple_message/byte_array.h>
 
@@ -57,6 +59,14 @@ const double VOLTAGE_SCALE = 100.0 / 32767.0;   // Raw to Volts
 const double CURRENT_SCALE = 1000.0 / 32767.0;  // Raw to Amperes
 const double WIRE_SPEED_SCALE = 40.0 / 32767.0;  // Raw to m/min
 
+// ------------------------------------------------------------------
+// Simple Message protocol constants
+// ------------------------------------------------------------------
+constexpr uint32_t HEADER_SIZE_BYTES      = 16;   // Size of SimpleMessage header (bytes)
+constexpr uint32_t COMM_TYPE_REQUEST      = 1;    // RI_CT_SVCREQ (topic-like)
+constexpr std::size_t SEQ_NUM_SIZE_BYTES  = 4;    // Bytes used by sequence number
+
+
 class FanucWeldStateNodeSimple
 {
 private:
@@ -66,6 +76,15 @@ private:
   int robot_port_;
   int sock_fd_;
   bool debug_;
+  bool little_endian_;   // true: expect little-endian payload, false: big-endian
+
+  // Protocol configuration (loaded from launch parameters)
+  uint32_t payload_only_length_;
+  uint32_t standard_format_length_;
+  uint32_t expected_msg_type_;
+  uint32_t expected_comm_type_;
+  std::size_t num_weld_fields_;
+  std::size_t payload_size_bytes_;
   
 public:
   FanucWeldStateNodeSimple() : nh_("~"), sock_fd_(-1)
@@ -74,13 +93,34 @@ public:
     nh_.param<std::string>("robot_ip", robot_ip_, "127.0.0.1");
     nh_.param<int>("robot_port", robot_port_, 11002);
     nh_.param<bool>("debug", debug_, false);
+
+    // Byte-order parameter: "little" (default) or "big"
+    std::string byte_order_param;
+    nh_.param<std::string>("byte_order", byte_order_param, std::string("little"));
+    std::transform(byte_order_param.begin(), byte_order_param.end(), byte_order_param.begin(), ::tolower);
+    little_endian_ = (byte_order_param == "little" || byte_order_param == "le");
     
     // Setup publisher
     weld_state_pub_ = nh_.advertise<fanuc_driver::WeldState>("weld_state", 10);
     
     ROS_INFO("Fanuc Weld State Simple Message Node Starting");
     ROS_INFO("Target: %s:%d", robot_ip_.c_str(), robot_port_);
+    // Protocol parameters (can be overridden in launch file)
+        int tmp_int = 0;
+    nh_.param<int>("payload_only_length", tmp_int, 32);
+    payload_only_length_ = static_cast<uint32_t>(tmp_int);
+    nh_.param<int>("standard_format_length", tmp_int, 53);
+    standard_format_length_ = static_cast<uint32_t>(tmp_int);
+    nh_.param<int>("expected_msg_type", tmp_int, WELD_STATE_MSG_TYPE);
+    expected_msg_type_ = static_cast<uint32_t>(tmp_int);
+    nh_.param<int>("expected_comm_type", tmp_int, COMM_TYPE_REQUEST);
+    expected_comm_type_ = static_cast<uint32_t>(tmp_int);
+    nh_.param<int>("num_weld_fields", tmp_int, 9);
+    num_weld_fields_ = static_cast<std::size_t>(tmp_int);
+    payload_size_bytes_ = num_weld_fields_ * sizeof(int32_t);
+
     if (debug_) ROS_INFO("Debug mode enabled");
+    ROS_INFO("Expecting %s-endian robot messages", little_endian_ ? "little" : "big");
   }
   
   ~FanucWeldStateNodeSimple()
@@ -208,18 +248,32 @@ private:
   
   bool receiveSimpleMessage(SimpleMessage& msg)
   {
-    // Receive header (16 bytes: length, msg_type, comm_type, reply_type)
-    uint8_t header_buf[16];
-    if (!receiveExactly(header_buf, 16))
+    // Receive header (HEADER_SIZE_BYTES bytes: length, msg_type, comm_type, reply_type)
+    uint8_t header_buf[HEADER_SIZE_BYTES];
+    if (!receiveExactly(header_buf, HEADER_SIZE_BYTES))
     {
       return false;
     }
     
-    // Parse header (Data from KAREL is Little Endian)
-    uint32_t length = *((uint32_t*)&header_buf[0]);
-    uint32_t msg_type = *((uint32_t*)&header_buf[4]);
-    uint32_t comm_type = *((uint32_t*)&header_buf[8]);
-    uint32_t reply_type = *((uint32_t*)&header_buf[12]);
+    // Helper lambdas for endian-aware reads
+    auto readUint32 = [this](const uint8_t* data) -> uint32_t
+    {
+      uint32_t val;
+      std::memcpy(&val, data, sizeof(uint32_t));
+      return little_endian_ ? val : ntohl(val);
+    };
+    auto readInt32 = [this](const uint8_t* data) -> int32_t
+    {
+      uint32_t tmp;
+      std::memcpy(&tmp, data, sizeof(uint32_t));
+      if (!little_endian_) tmp = ntohl(tmp);
+      return static_cast<int32_t>(tmp);
+    };
+    
+    uint32_t length     = readUint32(&header_buf[0]);
+    uint32_t msg_type   = readUint32(&header_buf[4]);
+    uint32_t comm_type  = readUint32(&header_buf[8]);
+    uint32_t reply_type = readUint32(&header_buf[12]);
     
     if (debug_)
     {
@@ -230,48 +284,43 @@ private:
     // Handle different message formats
     uint8_t* payload_buf = nullptr;
     
-    if (length == 32 && msg_type == 15 && comm_type == 1)
+    if (length == payload_only_length_ && msg_type == expected_msg_type_ && comm_type == expected_comm_type_)
     {
       // Format 1: Only payload (32 bytes), no sequence number
       if (debug_) ROS_DEBUG("Receiving payload-only format (length=32)");
       
-      uint8_t* direct_payload = new uint8_t[32];
-      if (!receiveExactly(direct_payload, 32))
+      uint8_t* direct_payload = new uint8_t[payload_only_length_];
+      if (!receiveExactly(direct_payload, payload_only_length_))
       {
         delete[] direct_payload;
         return false;
       }
       payload_buf = direct_payload;
       
-      // Peek to check whether a single terminator byte (CR or LF) follows the
-      // payload. Only consume it if it really is a terminator; otherwise leave
-      // the byte in the stream so that the next header is not corrupted.
+      // Optionally consume a single CR/LF terminator
       uint8_t peek_byte;
       ssize_t peek_ret = recv(sock_fd_, &peek_byte, 1, MSG_PEEK | MSG_DONTWAIT);
       if (peek_ret == 1 && (peek_byte == '\r' || peek_byte == '\n'))
       {
-        recv(sock_fd_, &peek_byte, 1, 0);  // remove the byte we just peeked
+        recv(sock_fd_, &peek_byte, 1, 0);
         if (debug_) ROS_DEBUG("Discarded terminator byte: 0x%02x", peek_byte);
       }
     }
-    else if (length == 53 && msg_type == 15 && comm_type == 1)
+    else if (length == standard_format_length_ && msg_type == expected_msg_type_ && comm_type == expected_comm_type_)
     {
       // Format 2: Standard Simple Message format with sequence number
       if (debug_) ROS_DEBUG("Receiving standard format (length=53)");
       
       // Receive remaining 40 bytes (4 bytes sequence + 36 bytes payload)
-      uint8_t remaining_buf[40];
-      if (!receiveExactly(remaining_buf, 40))
+      std::vector<uint8_t> remaining_buf(SEQ_NUM_SIZE_BYTES + payload_size_bytes_);
+      if (!receiveExactly(remaining_buf.data(), SEQ_NUM_SIZE_BYTES + payload_size_bytes_))
       {
         return false;
       }
-      
-      // Parse payload (skip sequence number, use remaining 36 bytes)
+      // Skip sequence number, keep payload pointer at offset 4
       payload_buf = &remaining_buf[4];
       
-      // Optionally remove a single terminator byte (CR or LF) that may follow
-      // the payload. Use the same peek-and-consume strategy as above to avoid
-      // accidentally dropping the first byte of the next message.
+      // Consume optional CR/LF after payload
       uint8_t peek_byte2;
       ssize_t peek_ret2 = recv(sock_fd_, &peek_byte2, 1, MSG_PEEK | MSG_DONTWAIT);
       if (peek_ret2 == 1 && (peek_byte2 == '\r' || peek_byte2 == '\n'))
@@ -292,22 +341,19 @@ private:
     
     // Create Simple Message object
     ByteArray data;
-    
-    // Load data in normal order for FIFO unload
-    for (int i = 0; i < 9; i++)
+    for (int i = 0; i < static_cast<int>(num_weld_fields_); i++)
     {
-      int32_t value = *((int32_t*)&payload_buf[i * 4]);
+      int32_t value = readInt32(payload_buf + i * 4);
       data.load(value);
     }
     
-    // Explicitly cast to signed 32-bit integers to avoid -Wsign-conversion warnings
     msg.init(static_cast<int32_t>(msg_type),
              static_cast<int32_t>(comm_type),
              static_cast<int32_t>(reply_type),
              data);
     
-    // Clean up if we allocated memory
-    if (length == 32)
+    // Clean up allocated payload if any
+    if (length == payload_only_length_)
     {
       delete[] payload_buf;
     }
@@ -332,28 +378,24 @@ private:
 
   void processWeldStateMessage(const SimpleMessage& msg)
   {
-    // Get the raw data buffer
+    // Extract data
     ByteArray data = const_cast<SimpleMessage&>(msg).getData();
-    
-    if (data.getBufferSize() < 36)
+    if (data.getBufferSize() < payload_size_bytes_)
     {
       ROS_WARN("Insufficient data size: %u bytes", data.getBufferSize());
       return;
     }
     
-    // Get the raw buffer
     std::vector<char> buffer;
     data.copyTo(buffer);
-    
-    if (buffer.size() < 36)
+    if (buffer.size() < payload_size_bytes_)
     {
       ROS_ERROR("Buffer size too small: %lu bytes", buffer.size());
       return;
     }
     
-    // Parse weld data (Little Endian)
-    int32_t weld_ints[9];
-    for (std::size_t i = 0; i < 9; i++)
+    std::vector<int32_t> weld_ints(num_weld_fields_);
+    for (std::size_t i = 0; i < num_weld_fields_; i++)
     {
       weld_ints[i] = *reinterpret_cast<int32_t*>(&buffer[i * 4]);
     }
@@ -368,10 +410,7 @@ private:
     }
     
     fanuc_driver::WeldState weld_msg;
-    
-    // Convert to ROS message
     weld_msg.arc_ok        = (weld_ints[0] != 0);
-    
     weld_msg.power_err     = (weld_ints[1] != 0);
     weld_msg.depos_di      = (weld_ints[2] != 0);
     weld_msg.ewm_err       = static_cast<int16_t>(weld_ints[3]);
@@ -390,7 +429,6 @@ private:
                weld_msg.act_current * CURRENT_SCALE);
     }
     
-    // Publish the message
     weld_state_pub_.publish(weld_msg);
   }
 };
@@ -411,4 +449,4 @@ int main(int argc, char** argv)
   node.run();
   
   return 0;
-} 
+}

@@ -6,6 +6,7 @@
 #include <unistd.h>
 #include <cstring>
 #include <algorithm>
+#include <vector>
 #include <cctype>
 
 // Scaling factors from EWM manual
@@ -24,6 +25,13 @@ private:
   bool debug_;
   bool little_endian_;   // true: expect little-endian payload, false: big-endian
   
+  // Protocol parameters (loaded from ROS params / launch file)
+  uint32_t expected_standard_length_;   // e.g. 61
+  uint32_t expected_msg_type_;          // e.g. 15
+  uint32_t expected_comm_type_;         // e.g. 1 (RI_CT_TOPIC or SVCREQ depending on sender)
+  int      payload_fields_;             // number of Int32 values in payload (default 9)
+  std::size_t payload_size_bytes_;      // derived: payload_fields_ * 4
+  
 public:
   FanucWeldStateNodeTcp() : nh_("~"), sock_fd_(-1)
   {
@@ -31,6 +39,17 @@ public:
     nh_.param<std::string>("robot_ip", robot_ip_, "127.0.0.1");
     nh_.param<int>("robot_port", robot_port_, 11002);
     nh_.param<bool>("debug", debug_, false);
+
+    // Protocol tuning parameters (can be set from launch file to avoid hard-coded magic numbers)
+    int tmp_int = 0;
+    nh_.param<int>("expected_standard_length", tmp_int, 61);
+    expected_standard_length_ = static_cast<uint32_t>(tmp_int);
+    nh_.param<int>("expected_msg_type", tmp_int, 15);
+    expected_msg_type_ = static_cast<uint32_t>(tmp_int);
+    nh_.param<int>("expected_comm_type", tmp_int, 1);
+    expected_comm_type_ = static_cast<uint32_t>(tmp_int);
+    nh_.param<int>("payload_fields", payload_fields_, 9);
+    payload_size_bytes_ = static_cast<std::size_t>(payload_fields_) * sizeof(int32_t);
 
     // Byte order parameter: "little" (default) or "big"
     std::string byte_order_param;
@@ -156,13 +175,21 @@ public:
                  msg_count, length, msg_type, comm_type, reply_type);
       }
       
-      // Validate header - expecting Standard Simple Message format with sequence number
-      if (length != 61 || msg_type != 15 || comm_type != 1)
+      // Basic header validation using configurable parameters
+      if (msg_type != expected_msg_type_ || comm_type != expected_comm_type_ ||
+          length < (4 + payload_size_bytes_))
       {
-        ROS_WARN("Invalid header format - Expected: Length=61, Type=15, Comm=1");
+        ROS_WARN("Invalid header - Expect: msg_type=%u, comm_type=%u, length>=%zu", 
+                 expected_msg_type_, expected_comm_type_, 4 + payload_size_bytes_);
         if (debug_)
         {
           ROS_WARN("Received: Length=%u, Type=%u, Comm=%u, Reply=%u", length, msg_type, comm_type, reply_type);
+        }
+        // consume and discard the reported length bytes to realign stream
+        if (length > 0)
+        {
+          std::vector<uint8_t> junk(length);
+          receiveExactly(junk.data(), length);
         }
         continue;
       }
@@ -176,17 +203,17 @@ public:
       }
       uint32_t seq_nr = readUint32(&seq_buf[0]);
       
-      // Receive payload (36 bytes of weld data)
-      uint8_t payload_buf[36];
-      if (!receiveExactly(payload_buf, 36))
+      // Receive payload (configurable size)
+      std::vector<uint8_t> payload_buf(payload_size_bytes_);
+      if (!receiveExactly(payload_buf.data(), payload_size_bytes_))
       {
         ROS_ERROR("Failed to receive payload");
         continue;
       }
       
       // Parse weld data (Little Endian)
-      int32_t weld_ints[9];
-      for (int i = 0; i < 9; i++)
+      std::vector<int32_t> weld_ints(payload_fields_);
+      for (int i = 0; i < payload_fields_; i++)
       {
         weld_ints[i] = readInt32(&payload_buf[i * 4]);
       }
