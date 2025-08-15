@@ -17,7 +17,13 @@ welding interface exposed through the *WeldCommand* / *WeldState* messages.
    when the *act_wire_spd* reported by *WeldState* reaches the commanded
    value (within a tolerance).
 
-Both tests publish *WeldCommand* messages on the **/weld_command** topic and,
+3. Pulse-Enhanced Step Signal Test
+   Publishes a step signal with randomly superimposed pulse signals on 
+   *target_wire_spd*. The pulses have random amplitudes within a specified 
+   range and short durations, useful for testing system response to 
+   sudden signal changes.
+
+All tests publish *WeldCommand* messages on the **/weld_command** topic and,
 where applicable, subscribe to **/weld_state**.
 
 Usage examples
@@ -28,6 +34,9 @@ Usage examples
 # Wire-speed sine wave 0.5 Hz, amplitude 40, offset 30, duration 60 s
 ./weld_control_freq_test.py wire --waveform sine --freq 0.5 --amp 40 --offset 30 --duration 60
 
+# Pulse-enhanced step signal: 2 Hz step, 5 pulses/sec, pulse amplitude ±10, duration 30 s
+./weld_control_freq_test.py pulse --step-freq 2.0 --pulse-rate 5.0 --pulse-amp 10 --duration 30
+
 Author: YOUR_NAME
 Date  : 2024
 """
@@ -35,8 +44,8 @@ from __future__ import annotations
 
 import argparse
 import math
+import random
 import sys
-import time
 from collections import deque
 from typing import Deque, List, Tuple
 
@@ -76,12 +85,12 @@ class WeldFreqTester:
         )
 
     # ---------------------------------------------------------------------
-    # ROS message helpers
+    # ROS message helper
     # ---------------------------------------------------------------------
 
     @staticmethod
     def _base_cmd() -> WeldCommand:
-        """Return a *WeldCommand* with all fields initialised to the NO_CHANGE (-1) sentinel."""
+        """Return a *WeldCommand* with ƒall fields initialised to the NO_CHANGE (-1) sentinel."""
         cmd = WeldCommand()
         cmd.header = Header()
         cmd.header.stamp = rospy.Time.now()
@@ -233,6 +242,109 @@ class WeldFreqTester:
         else:
             rospy.logwarn("No latency samples collected. Check threshold/connection.")
 
+    # ---------------------------------------------------------------------
+    # Pulse-enhanced step signal test
+    # ---------------------------------------------------------------------
+
+    def run_pulse_test(
+        self,
+        *,
+        step_freq: float,
+        step_amp: float,
+        offset: float,
+        pulse_rate: float,
+        pulse_amp: float,
+        pulse_duration: float,
+        duration: float,
+        sample_rate: float = 50.0,
+    ) -> None:
+        """Publish a step signal with randomly superimposed pulse signals.
+        
+        Args:
+            step_freq: Frequency of the base step signal [Hz]
+            step_amp: Amplitude of the base step signal
+            offset: DC offset for the signal
+            pulse_rate: Average rate of pulse occurrences [pulses/sec]
+            pulse_amp: Maximum amplitude range for pulses (±pulse_amp)
+            pulse_duration: Duration of each pulse [seconds]
+            duration: Total test duration [seconds]
+            sample_rate: Publishing rate [Hz]
+        """
+        rospy.loginfo(
+            "Starting pulse-enhanced step test: step_freq=%.2f Hz, step_amp=%.1f, "
+            "pulse_rate=%.2f pps, pulse_amp=±%.1f, pulse_duration=%.3f s, duration=%.1f s",
+            step_freq,
+            step_amp,
+            offset,
+            pulse_rate,
+            pulse_amp,
+            pulse_duration,
+            duration,
+        )
+
+        rate = rospy.Rate(sample_rate)
+        start_time = rospy.get_time()
+        t_end = start_time + duration
+        
+        # Pulse state tracking
+        pulse_end_time = 0.0
+        current_pulse_amplitude = 0.0
+        
+        # Calculate pulse probability per sample
+        pulse_prob_per_sample = pulse_rate / sample_rate
+
+        while not rospy.is_shutdown() and rospy.get_time() < t_end:
+            t_now = rospy.get_time() - start_time
+            
+            # Generate base step signal
+            phase = (t_now * step_freq) % 1.0
+            base_signal = step_amp if phase < 0.5 else -step_amp
+            
+            # Handle pulse generation and decay
+            current_time = rospy.get_time()
+            
+            # Check if current pulse has expired
+            if current_time >= pulse_end_time:
+                current_pulse_amplitude = 0.0
+                
+                # Randomly generate new pulse
+                if random.random() < pulse_prob_per_sample:
+                    # Generate random pulse amplitude in ±pulse_amp range
+                    current_pulse_amplitude = random.uniform(-pulse_amp, pulse_amp)
+                    pulse_end_time = current_time + pulse_duration
+                    rospy.logdebug(
+                        "Generated pulse: amplitude=%.2f, duration=%.3f s", 
+                        current_pulse_amplitude, 
+                        pulse_duration
+                    )
+            
+            # Combine base signal with pulse
+            target_val = int(offset + base_signal + current_pulse_amplitude)
+            
+            cmd = self._base_cmd()
+            cmd.target_wire_spd = target_val
+            self._publish_cmd(cmd)
+            
+            # Store command for latency measurement
+            self.cmd_history.append((target_val, rospy.Time.now()))
+            
+            rate.sleep()
+
+        # Report latency statistics if available
+        if self.latencies:
+            avg_lat = sum(self.latencies) / len(self.latencies)
+            max_lat = max(self.latencies)
+            min_lat = min(self.latencies)
+            rospy.loginfo(
+                "Pulse test finished. Latency samples: %d  avg=%.4f s  min=%.4f s  max=%.4f s",
+                len(self.latencies),
+                avg_lat,
+                min_lat,
+                max_lat,
+            )
+        else:
+            rospy.logwarn("No latency samples collected. Check threshold/connection.")
+
 
 # -------------- main / argument parsing ---------------------------------------------
 
@@ -291,6 +403,60 @@ def main():
         help="Publishing sample rate [Hz]",
     )
 
+    # Pulse-enhanced step signal test ----------------------------------------------------
+    pulse_p = subparsers.add_parser("pulse", help="Pulse-enhanced step signal test")
+    pulse_p.add_argument(
+        "--step-freq",
+        type=float,
+        default=1.0,
+        help="Frequency of base step signal [Hz]",
+    )
+    pulse_p.add_argument(
+        "--step-amp",
+        type=float,
+        default=15.0,
+        help="Amplitude of base step signal",
+    )
+    pulse_p.add_argument(
+        "--offset",
+        type=float,
+        default=20.0,
+        help="DC offset / centre value of signal",
+    )
+    pulse_p.add_argument(
+        "--pulse-rate",
+        type=float,
+        default=3.0,
+        help="Average pulse occurrence rate [pulses/sec]",
+    )
+    pulse_p.add_argument(
+        "--pulse-amp",
+        type=float,
+        default=8.0,
+        help="Maximum pulse amplitude range (±value)",
+    )
+    pulse_p.add_argument(
+        "--pulse-duration",
+        type=float,
+        default=0.2,
+        help="Duration of each pulse [seconds]",
+    )
+    pulse_p.add_argument(
+        "-d", "--duration", type=float, default=30.0, help="Test duration [s]"
+    )
+    pulse_p.add_argument(
+        "--threshold",
+        type=float,
+        default=1.0,
+        help="Tolerance between commanded and actual wire speed considered 'reached'",
+    )
+    pulse_p.add_argument(
+        "--sample-rate",
+        type=float,
+        default=50.0,
+        help="Publishing sample rate [Hz]",
+    )
+
     args = parser.parse_args()
 
     try:
@@ -306,6 +472,17 @@ def main():
                 freq=args.freq,
                 amp=args.amp,
                 offset=args.offset,
+                duration=args.duration,
+                sample_rate=args.sample_rate,
+            )
+        elif args.test == "pulse":
+            tester.run_pulse_test(
+                step_freq=args.step_freq,
+                step_amp=args.step_amp,
+                offset=args.offset,
+                pulse_rate=args.pulse_rate,
+                pulse_amp=args.pulse_amp,
+                pulse_duration=args.pulse_duration,
                 duration=args.duration,
                 sample_rate=args.sample_rate,
             )

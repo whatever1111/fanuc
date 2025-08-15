@@ -1,0 +1,46 @@
+<!-- 
+ROS Test Launch File for Weld Control Frequency Test
+====================================================
+
+This launch file runs the integrated ROS tests for the weld_control_freq_test.py
+script using the rostest framework.
+
+Usage:
+    rostest fanuc_driver test_weld_control_freq_ros.test
+
+Author: Test Suite
+Date: 2024
+-->
+
+<launch>
+  <!-- Test configuration parameters -->
+  <param name="test_timeout" value="30.0" />
+  <param name="use_sim_time" value="false" />
+  
+  <!-- Launch the test node -->
+  <test test-name="test_weld_control_freq_ros" 
+        pkg="fanuc_driver" 
+        type="test_weld_control_freq_ros.py"
+        time-limit="30.0">
+    
+    <!-- Test-specific parameters -->
+    <param name="test_duration" value="2.0" />
+    <param name="sample_rate" value="20.0" />
+    <param name="threshold" value="2.0" />
+    
+    <!-- Remap topics if needed for testing -->
+    <remap from="/weld_command" to="/test/weld_command" />
+    <remap from="/weld_state" to="/test/weld_state" />
+  </test>
+  
+  <!-- Optional: Launch a mock weld state publisher for more comprehensive testing -->
+  <node name="mock_weld_state_publisher" 
+        pkg="fanuc_driver" 
+        type="mock_weld_state_publisher.py" 
+        output="screen"
+        if="$(optenv ENABLE_MOCK_PUBLISHER false)">
+    <param name="publish_rate" value="50.0" />
+    <remap from="/weld_state" to="/test/weld_state" />
+  </node>
+  
+</launch>
