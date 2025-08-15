@@ -81,13 +81,13 @@ class WeldStateValidator:
         
         # Check for typical welding ranges
         if msg.arc_ok:
-            if not (5.0 <= voltage_scaled <= 50.0):
+            if not 5.0 <= voltage_scaled <= 50.0:
                 self.log_warning(f"Voltage unusual for welding: {voltage_scaled:.1f}V")
             
-            if not (20.0 <= current_scaled <= 600.0):
+            if not 20.0 <= current_scaled <= 600.0:
                 self.log_warning(f"Current unusual for welding: {current_scaled:.0f}A")
             
-            if not (1.0 <= wire_speed_scaled <= 25.0):
+            if not 1.0 <= wire_speed_scaled <= 25.0:
                 self.log_warning(f"Wire speed unusual: {wire_speed_scaled:.1f}m/min")
         
         # Check for stuck values (all zeros or same value repeated)

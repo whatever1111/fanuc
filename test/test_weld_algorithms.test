@@ -1,0 +1,30 @@
+<!-- 
+ROS Test Launch File for Weld Algorithm Unit Tests
+==================================================
+
+This launch file runs unit tests for the waveform generation algorithms
+without requiring ROS message infrastructure.
+
+Usage:
+    rostest fanuc_driver test_weld_algorithms.test
+
+Author: Test Suite
+Date: 2024
+-->
+
+<launch>
+  <!-- Test configuration -->
+  <param name="test_timeout" value="15.0" />
+  
+  <!-- Unit test for algorithms -->
+  <test test-name="test_weld_algorithms" 
+        pkg="fanuc_driver" 
+        type="test_weld_algorithms.py"
+        time-limit="15.0">
+    
+    <!-- Algorithm test parameters -->
+    <param name="test_precision" value="1e-6" />
+    <param name="test_iterations" value="1000" />
+  </test>
+  
+</launch>
