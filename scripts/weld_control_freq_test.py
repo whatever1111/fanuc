@@ -271,7 +271,7 @@ class WeldFreqTester:
             sample_rate: Publishing rate [Hz]
         """
         rospy.loginfo(
-            "Starting pulse-enhanced step test: step_freq=%.2f Hz, step_amp=%.1f, "
+            "Starting pulse-enhanced step test: step_freq=%.2f Hz, step_amp=%.1f, offset=%.1f, "
             "pulse_rate=%.2f pps, pulse_amp=±%.1f, pulse_duration=%.3f s, duration=%.1f s",
             step_freq,
             step_amp,
