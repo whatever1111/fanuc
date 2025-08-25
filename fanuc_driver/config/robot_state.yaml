@@ -1,0 +1,7 @@
+/**:
+  ros__parameters:
+    robot_ip: "192.168.1.100"    # Robot controller IP address
+    robot_port: 11002             # State server port (SimpleMessage)
+    J23_factor: 0                 # J2-J3 coupling: -1, 0, or 1
+    use_bswap: false              # Byte swapping for big-endian controllers
+    joint_names: ["joint_1", "joint_2", "joint_3", "joint_4", "joint_5", "joint_6"]
