@@ -113,7 +113,7 @@ ros2 run fanuc_driver simple_motion_test.py home
 #### 完整接口（推荐）
 ```bash
 ros2 launch fanuc_driver robot_interface_streaming.launch.py \
-  robot_ip:=192.168.1.100 \
+  robot_ip:=192.168.0.99 \
   J23_factor:=0 \
   use_bswap:=false
 ```
@@ -122,12 +122,12 @@ ros2 launch fanuc_driver robot_interface_streaming.launch.py \
 ```bash
 # 仅状态读取
 ros2 launch fanuc_driver robot_state.launch.py \
-  robot_ip:=192.168.1.100 \
+  robot_ip:=192.168.0.99 \
   robot_port:=11002
 
 # 仅运动控制
 ros2 launch fanuc_driver motion_streaming_interface.launch.py \
-  robot_ip:=192.168.1.100 \
+  robot_ip:=192.168.0.99\
   robot_port:=11000
 ```
 
