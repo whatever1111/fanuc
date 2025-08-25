@@ -1,181 +1,60 @@
-cmake_minimum_required(VERSION 3.0.2)
-
+cmake_minimum_required(VERSION 3.8)
 project(fanuc_driver)
 
-set(CMAKE_CXX_STANDARD 11)
-set(CMAKE_CXX_STANDARD_REQUIRED ON)
+find_package(ament_cmake REQUIRED)
+find_package(rosidl_default_generators REQUIRED)
+find_package(std_msgs REQUIRED)
+find_package(rclcpp REQUIRED)
+find_package(yaml-cpp REQUIRED)
 
-# let industrial_robot_client pull in all other dependencies
-find_package(catkin REQUIRED COMPONENTS 
-  industrial_robot_client
-  message_generation
-  std_msgs)
-
-# Add message files
-add_message_files(
-  FILES
-  WeldState.msg
-  WeldCommand.msg
+rosidl_generate_interfaces(${PROJECT_NAME}
+  "msg/WeldCommand.msg"
+  "msg/WeldState.msg"
+  DEPENDENCIES std_msgs
 )
 
-# Generate messages
-generate_messages(
-  DEPENDENCIES
-  std_msgs
+add_executable(weld_command_node src/fanuc_weld_command_node.cpp)
+ament_target_dependencies(weld_command_node rclcpp)
+target_link_libraries(weld_command_node yaml-cpp)
+rosidl_target_interfaces(weld_command_node ${PROJECT_NAME} "rosidl_typesupport_cpp")
+install(TARGETS weld_command_node DESTINATION lib/${PROJECT_NAME})
+
+add_executable(weld_state_node_tcp src/fanuc_weld_state_node.cpp)
+ament_target_dependencies(weld_state_node_tcp rclcpp)
+target_link_libraries(weld_state_node_tcp yaml-cpp)
+rosidl_target_interfaces(weld_state_node_tcp ${PROJECT_NAME} "rosidl_typesupport_cpp")
+install(TARGETS weld_state_node_tcp DESTINATION lib/${PROJECT_NAME})
+
+add_executable(weld_state_node_simple src/fanuc_weld_state_node_simple.cpp)
+ament_target_dependencies(weld_state_node_simple rclcpp)
+target_link_libraries(weld_state_node_simple yaml-cpp)
+rosidl_target_interfaces(weld_state_node_simple ${PROJECT_NAME} "rosidl_typesupport_cpp")
+install(TARGETS weld_state_node_simple DESTINATION lib/${PROJECT_NAME})
+
+ament_export_dependencies(rosidl_default_runtime)
+ament_package()
+
+install(DIRECTORY launch config DESTINATION share/${PROJECT_NAME})
+install(PROGRAMS
+  scripts/weld_command_test.py
+  scripts/weld_control_freq_test.py
+  DESTINATION lib/${PROJECT_NAME}
 )
 
-catkin_package(
-  CATKIN_DEPENDS 
-    industrial_robot_client
-    message_runtime
-    std_msgs
-)
-
-include_directories(
-  include
-  ${catkin_INCLUDE_DIRS}
-)
-
-
-# non-swapping Fanuc specific robot state node
-add_executable(${PROJECT_NAME}_robot_state
-  src/fanuc_robot_state_node.cpp
-  src/fanuc_utils.cpp)
-target_link_libraries(${PROJECT_NAME}_robot_state
-  industrial_robot_client
-  simple_message
-  ${catkin_LIBRARIES})
-set_target_properties(${PROJECT_NAME}_robot_state
-  PROPERTIES OUTPUT_NAME robot_state
-  PREFIX "")
-target_compile_definitions(
-  ${PROJECT_NAME}_robot_state
-  PRIVATE
-  ${industrial_robot_client_DEFINITIONS})
-
-
-# byte-swapping Fanuc specific robot state node
-add_executable(${PROJECT_NAME}_robot_state_bswap
-  src/fanuc_robot_state_node.cpp
-  src/fanuc_utils.cpp)
-target_link_libraries(${PROJECT_NAME}_robot_state_bswap
-  industrial_robot_client_bswap
-  simple_message_bswap
-  ${catkin_LIBRARIES})
-set_target_properties(${PROJECT_NAME}_robot_state_bswap
-  PROPERTIES OUTPUT_NAME robot_state_bswap
-  PREFIX "")
-target_compile_definitions(
-  ${PROJECT_NAME}_robot_state_bswap
-  PRIVATE
-  ${industrial_robot_client_bswap_DEFINITIONS})
-
-
-# TCP version Weld state node (direct TCP connection)
-add_executable(${PROJECT_NAME}_weld_state_tcp
-  src/fanuc_weld_state_node.cpp)
-target_link_libraries(${PROJECT_NAME}_weld_state_tcp
-  ${catkin_LIBRARIES})
-set_target_properties(${PROJECT_NAME}_weld_state_tcp
-  PROPERTIES OUTPUT_NAME fanuc_weld_state_node_tcp
-  PREFIX "")
-add_dependencies(${PROJECT_NAME}_weld_state_tcp ${PROJECT_NAME}_generate_messages_cpp)
-
-# Simple Message version Weld state node (ROS-Industrial protocol)
-add_executable(${PROJECT_NAME}_weld_state_simple
-  src/fanuc_weld_state_node_simple.cpp)
-target_link_libraries(${PROJECT_NAME}_weld_state_simple
-  industrial_robot_client
-  simple_message
-  ${catkin_LIBRARIES})
-set_target_properties(${PROJECT_NAME}_weld_state_simple
-  PROPERTIES OUTPUT_NAME fanuc_weld_state_node_simple
-  PREFIX "")
-target_compile_definitions(
-  ${PROJECT_NAME}_weld_state_simple
-  PRIVATE
-  ${industrial_robot_client_DEFINITIONS})
-add_dependencies(${PROJECT_NAME}_weld_state_simple ${PROJECT_NAME}_generate_messages_cpp)
-
-
-# Weld command node
-add_executable(${PROJECT_NAME}_weld_command
-  src/fanuc_weld_command_node.cpp)
-target_link_libraries(${PROJECT_NAME}_weld_command
-  ${catkin_LIBRARIES})
-set_target_properties(${PROJECT_NAME}_weld_command
-  PROPERTIES OUTPUT_NAME weld_command_node
-  PREFIX "")
-add_dependencies(${PROJECT_NAME}_weld_command ${PROJECT_NAME}_generate_messages_cpp)
-
-
-# non-swapping Fanuc specific motion streaming interface
-add_executable(${PROJECT_NAME}_motion_streaming_interface
-  src/fanuc_joint_streamer_node.cpp
-  src/fanuc_utils.cpp)
-target_link_libraries(${PROJECT_NAME}_motion_streaming_interface
-  industrial_robot_client
-  simple_message
-  ${catkin_LIBRARIES})
-set_target_properties(${PROJECT_NAME}_motion_streaming_interface
-  PROPERTIES OUTPUT_NAME motion_streaming_interface
-  PREFIX "")
-target_compile_definitions(
-  ${PROJECT_NAME}_motion_streaming_interface
-  PRIVATE
-  ${industrial_robot_client_DEFINITIONS})
-
-
-# byte-swapping Fanuc specific motion streaming interface
-add_executable(${PROJECT_NAME}_motion_streaming_interface_bswap
-  src/fanuc_joint_streamer_node.cpp
-  src/fanuc_utils.cpp)
-target_link_libraries(${PROJECT_NAME}_motion_streaming_interface_bswap
-  industrial_robot_client_bswap
-  simple_message_bswap
-  ${catkin_LIBRARIES})
-set_target_properties(${PROJECT_NAME}_motion_streaming_interface_bswap
-  PROPERTIES OUTPUT_NAME motion_streaming_interface_bswap
-  PREFIX "")
-target_compile_definitions(
-  ${PROJECT_NAME}_motion_streaming_interface_bswap
-  PRIVATE
-  ${industrial_robot_client_bswap_DEFINITIONS})
-
-
-if (CATKIN_ENABLE_TESTING)
-  find_package(roslaunch REQUIRED)
-
-  set(rl_test_deps
-    ${PROJECT_NAME}_robot_state
-    ${PROJECT_NAME}_robot_state_bswap
-    ${PROJECT_NAME}_motion_streaming_interface
-    ${PROJECT_NAME}_motion_streaming_interface_bswap
-    ${PROJECT_NAME}_weld_state_tcp
-    ${PROJECT_NAME}_weld_state_simple)
-
-  if (TARGET joint_trajectory_action)
-    # not nice, but industrial_robot_client doesn't prefix its targets
-    list(APPEND rl_test_deps joint_trajectory_action)
-  endif()
-
-  roslaunch_add_file_check(tests/roslaunch_test.xml
-    DEPENDENCIES ${rl_test_deps})
+if(BUILD_TESTING)
+  find_package(ament_cmake_pytest REQUIRED)
+  # Python-based launch test verifying TCP packet emitted by node
+  ament_add_pytest_test(test_weld_command_node
+    test/test_weld_command_node.py
+    TIMEOUT 30
+  )
+  # Python-based launch test for weld_state_node_tcp parsing
+  ament_add_pytest_test(test_weld_state_node
+    test/test_weld_state_node.py
+    TIMEOUT 30
+  )
+  ament_add_pytest_test(test_weld_state_node_simple
+    test/test_weld_state_node_simple.py
+    TIMEOUT 30
+  )
 endif()
-
-
-install(TARGETS
-  ${PROJECT_NAME}_robot_state
-  ${PROJECT_NAME}_robot_state_bswap
-  ${PROJECT_NAME}_motion_streaming_interface
-  ${PROJECT_NAME}_motion_streaming_interface_bswap
-  ${PROJECT_NAME}_weld_state_tcp
-  ${PROJECT_NAME}_weld_state_simple
-
-  DESTINATION ${CATKIN_PACKAGE_BIN_DESTINATION}
-)
-
-install(DIRECTORY karel launch tpe
-  DESTINATION ${CATKIN_PACKAGE_SHARE_DESTINATION})
-
-install(FILES readme.md DESTINATION ${CATKIN_PACKAGE_SHARE_DESTINATION})

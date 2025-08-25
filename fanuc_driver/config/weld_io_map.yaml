@@ -1,0 +1,57 @@
+# Unified IO mapping template for Fanuc welding integration
+# NOTE:
+# - This file is a TEMPLATE for KAREL IO mapping and general robot connection
+#   info. It is NOT intended to be loaded as ROS parameters directly (it
+#   contains nested objects which ROS 2 parameters do not support).
+# - ROS 2 nodes will continue to read from their own YAMLs (e.g.
+#   weld_command.yaml, weld_state.yaml). C++ nodes additionally support the
+#   optional port override parameters `port_weld_command` and `port_weld_state`.
+# - KAREL side will consume this template via a build-time generation step that
+#   produces an include file with flat constants.
+
+version: 1
+
+robot:
+  ip: "127.0.0.1"
+  byte_order: "little"   # "little" or "big"
+  ports:
+    weld_state_server: 11001   # Recommended to separate state/command ports
+    weld_command_server: 11002
+
+# IO mapping for welding application
+# - type: one of [DI, DO, GI, GO, R]
+# - index: positive integer
+# - Optional: scale (float), offset (float) for analog engineering conversion
+io_map:
+  inputs:
+    arc_ok:          { type: DI, index: 249 }
+    power_err:       { type: DI, index: 252 }
+    depos_di:        { type: DI, index: 251 }
+    ewm_err:         { type: GI, index: 1 }
+    warning_state:   { type: GI, index: 6 }
+    act_voltage:     { type: GI, index: 2 }
+    act_current:     { type: GI, index: 3 }
+    act_wire_spd:    { type: GI, index: 4 }
+    motor_current:   { type: GI, index: 5 }
+
+  outputs:
+    program_number:  { type: GO, index: 2 }
+    target_wire_spd: { type: GO, index: 3 }
+    correction_val:  { type: GO, index: 4 }
+    dyn_setting:     { type: GO, index: 5 }
+    operation_mode:  { type: GO, index: 6 }
+    std_pulse_val:   { type: GO, index: 7 }
+    arc_start_cmd:   { type: DO, index: 253 }
+    gas_control:     { type: DO, index: 255 }
+    jog_feed_cmd:    { type: DO, index: 257 }
+    jog_retract_cmd: { type: DO, index: 259 }
+
+  # Optional overrides using R registers (useful for simulation or when fieldbus
+  # mapping is not available). If provided, they supersede the inputs/outputs
+  # above for the corresponding signal name.
+  overrides:
+    # act_voltage:     { type: R, index: 201 }
+    # program_number:  { type: R, index: 301 }
+
+# End of template
+

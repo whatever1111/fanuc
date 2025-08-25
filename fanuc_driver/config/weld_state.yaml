@@ -1,0 +1,20 @@
+/**:
+  ros__parameters:
+    robot_ip: "127.0.0.1"
+    robot_port: 11002
+    byte_order: "little"      # "little" or "big"
+    debug: false
+    dump_raw: false
+    expected_standard_length: 53
+    expected_msg_type: 15
+    expected_comm_type: 1
+    payload_fields: 9
+    # For SimpleMessage variant (fanuc_weld_state_node_simple)
+    payload_only_length: 32
+    standard_format_length: 53
+    num_weld_fields: 9
+    # Optional: path to unified IO map file; if provided, overrides ip/port/byte_order
+    # io_map_file: "/absolute/path/to/weld_io_map.yaml"
+    # Optional: override state port if using unified IO map
+    # port_weld_state: 11001
+

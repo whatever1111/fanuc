@@ -1,0 +1,10 @@
+fanuc_driver:
+  ros__parameters:
+    robot_ip: "127.0.0.1"
+    robot_port: 11002
+    byte_order: "little"
+    enable_heartbeat: false
+    # Optional: path to unified IO map file; if provided, overrides ip/port/byte_order
+    # io_map_file: "/absolute/path/to/weld_io_map.yaml"
+    # Optional: override command port if using unified IO map
+    # port_weld_command: 11002

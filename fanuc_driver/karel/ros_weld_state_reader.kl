@@ -87,6 +87,10 @@ TYPE
 		arc_di       : INTEGER  -- DI for arc detection
 		power_err_di : INTEGER  -- DI for power error
 		depos_di     : INTEGER  -- DI for deposition detection
+		ewm_err_gi   : INTEGER  -- GI for EWM error status word
+		wfs_gi       : INTEGER  -- GI for wire feed speed
+		motor_curr_gi: INTEGER  -- GI for motor current
+		warning_gi   : INTEGER  -- GI for warning status
 	ENDSTRUCTURE
 
 
@@ -125,6 +129,11 @@ CONST
 	DEF_ARC_DI       = 249 -- DI[249] for arc detection
 	DEF_POWER_ERR_DI = 252 -- DI[252] for power error
 	DEF_DEPOS_DI     = 251 -- DI[251] for deposition detection
+
+	DEF_EWM_ERR_GI   = 1   -- GI[1] for EWM error status word
+	DEF_WFS_GI       = 4   -- GI[4] for wire feed speed
+	DEF_MOTOR_CURR_GI= 5   -- GI[5] for motor current
+	DEF_WARNING_GI   = 6   -- GI[6] for warning status
 
 
 --------------------------------------------------------------------------------
@@ -180,9 +189,9 @@ BEGIN
 
 	-- init welding state packet
 	USING weld_pkt_out_ DO
-		-- Standard Simple Message format: msg_type(4) + comm_type(4) + reply_type(4) + seq_nr(4) + payload(32) + CR(1) = 49 bytes
+		-- Standard Simple Message format: msg_type(4) + comm_type(4) + reply_type(4) + payload(36) + CR(1) = 49 bytes
 		-- length field contains everything after length field itself
-		hdr_.length_     = 49  -- 4+4+4+4+32+1 bytes (everything after length field)
+		hdr_.length_     = 53  -- 4+4+4+(9*4)+1 = 53
 		hdr_.msg_type_   = RI_MT_WELDST
 		hdr_.comm_type_  = RI_CT_TOPIC
 		hdr_.reply_type_ = RI_RT_INVAL
@@ -242,15 +251,18 @@ BEGIN
 				-- Read digital inputs for boolean states
 				-- Use simple true/false logic for now
 				arc_ok = DIN[cfg_.arc_di]           -- DI[249] Arc detection
-				ready = TRUE                        -- Assume ready for testing
-				stick_err = FALSE                   -- No stick error for testing
 				power_err = DIN[cfg_.power_err_di]  -- DI[252] Power error
 				
 				-- Send deposition detection status directly as boolean
 				depos_di = DIN[cfg_.depos_di]       -- DI[251] Deposition detection (original value)
 				
 				-- Set wire speed to a default value (not used in new mapping)
-				act_wire_spd = 0
+				-- Read status words and additional analogs
+				ewm_err       = GIN[cfg_.ewm_err_gi]   -- GI[1] Error status word
+			warn_state = GIN[cfg_.warning_gi]   -- GI[6] Warning status word
+			-- Wire feed speed and motor current (analog)
+			act_wire_spd  = GIN[cfg_.wfs_gi]       -- GI[4] Wire feed speed
+			mot_curr = GIN[cfg_.motor_curr_gi]-- GI[5] Motor current
 			ENDUSING
 
 			-- serialise welding state packet, write to socket
@@ -313,13 +325,18 @@ BEGIN
 	IF (UNINIT(cfg.s_tcp_nr )) THEN cfg.s_tcp_nr  = WELD_TCP_P   ; a__ = TRUE; ENDIF
 	IF (UNINIT(cfg.s_tag_nr )) THEN cfg.s_tag_nr  = WELD_TAG     ; a__ = TRUE; ENDIF
 	IF (UNINIT(cfg.um_clear )) THEN cfg.um_clear  = TRUE         ; a__ = TRUE; ENDIF
+	IF (UNINIT(cfg.checked  )) THEN cfg.checked   = FALSE        ; a__ = TRUE; ENDIF
 	-- I/O mappings
 	IF (UNINIT(cfg.volt_gi     )) THEN cfg.volt_gi      = DEF_VOLT_GI     ; a__ = TRUE; ENDIF
 	IF (UNINIT(cfg.curr_gi     )) THEN cfg.curr_gi      = DEF_CURR_GI     ; a__ = TRUE; ENDIF
 	IF (UNINIT(cfg.arc_di      )) THEN cfg.arc_di       = DEF_ARC_DI      ; a__ = TRUE; ENDIF
 	IF (UNINIT(cfg.power_err_di)) THEN cfg.power_err_di = DEF_POWER_ERR_DI; a__ = TRUE; ENDIF
 	IF (UNINIT(cfg.depos_di    )) THEN cfg.depos_di     = DEF_DEPOS_DI    ; a__ = TRUE; ENDIF
-	IF (UNINIT(cfg.checked  )) THEN cfg.checked   = FALSE        ; a__ = TRUE; ENDIF
+	IF (UNINIT(cfg.ewm_err_gi )) THEN cfg.ewm_err_gi  = DEF_EWM_ERR_GI  ; a__ = TRUE; ENDIF
+	IF (UNINIT(cfg.wfs_gi     )) THEN cfg.wfs_gi      = DEF_WFS_GI      ; a__ = TRUE; ENDIF
+	IF (UNINIT(cfg.motor_curr_gi)) THEN cfg.motor_curr_gi = DEF_MOTOR_CURR_GI ; a__ = TRUE; ENDIF
+	IF (UNINIT(cfg.warning_gi )) THEN cfg.warning_gi  = DEF_WARNING_GI  ; a__ = TRUE; ENDIF
+	
 
 	-- make sure user has checked configuration
 	IF ((NOT cfg.checked) OR a__) THEN RETURN (CFG_NOTDONE); ENDIF
@@ -346,10 +363,9 @@ BEGIN
 	-- 2. Message type (4 bytes)
 	-- 3. Communication type (4 bytes) 
 	-- 4. Reply type (4 bytes)
-	-- 5. Sequence number (4 bytes)
-	-- 6. Payload (32 bytes)
-	-- 7. CR terminator (1 byte)
-	-- Total: 4 + 4 + 4 + 4 + 4 + 32 + 1 = 53 bytes (length field = 49)
+	-- 5. Payload (36 bytes)
+-- 6. CR terminator (1 byte)
+-- Total: 4 + 4 + 4 + 4 + 36 + 1 = 53 bytes (length field = 49)
 
 	-- Write header fields and check status each time
 	WRITE fdesc (pkt.hdr_.length_)
@@ -368,37 +384,33 @@ BEGIN
 	stat__ = IO_STATUS(fdesc)
 	IF stat__ <> 0 THEN RETURN (-stat__); ENDIF
 
-	-- Write sequence number (increment for each message)
-	seq_nr_ = seq_nr_ + 1
-	WRITE fdesc (seq_nr_)
-	stat__ = IO_STATUS(fdesc)
-	IF stat__ <> 0 THEN RETURN (-stat__); ENDIF
-
 	-- Write weld_state_t payload, converting booleans to integers
 	IF pkt.weld_data_.arc_ok THEN bool_int = 1; ELSE bool_int = 0; ENDIF
 	WRITE fdesc (bool_int)
 	stat__ = IO_STATUS(fdesc)
 	IF stat__ <> 0 THEN RETURN (-stat__); ENDIF
 
-	IF pkt.weld_data_.ready THEN bool_int = 1; ELSE bool_int = 0; ENDIF
-	WRITE fdesc (bool_int)
-	stat__ = IO_STATUS(fdesc)
-	IF stat__ <> 0 THEN RETURN (-stat__); ENDIF
-
-	IF pkt.weld_data_.stick_err THEN bool_int = 1; ELSE bool_int = 0; ENDIF
-	WRITE fdesc (bool_int)
-	stat__ = IO_STATUS(fdesc)
-	IF stat__ <> 0 THEN RETURN (-stat__); ENDIF
 
 	IF pkt.weld_data_.power_err THEN bool_int = 1; ELSE bool_int = 0; ENDIF
 	WRITE fdesc (bool_int)
 	stat__ = IO_STATUS(fdesc)
 	IF stat__ <> 0 THEN RETURN (-stat__); ENDIF
 
-	WRITE fdesc (pkt.weld_data_.depos_di)
+	IF pkt.weld_data_.depos_di THEN bool_int = 1; ELSE bool_int = 0; ENDIF
+	WRITE fdesc (bool_int)
 	stat__ = IO_STATUS(fdesc)
 	IF stat__ <> 0 THEN RETURN (-stat__); ENDIF
 
+	-- New status words
+	WRITE fdesc (pkt.weld_data_.ewm_err)
+	stat__ = IO_STATUS(fdesc)
+	IF stat__ <> 0 THEN RETURN (-stat__); ENDIF
+
+	WRITE fdesc (pkt.weld_data_.warn_state)
+	stat__ = IO_STATUS(fdesc)
+	IF stat__ <> 0 THEN RETURN (-stat__); ENDIF
+
+	-- Analog values
 	WRITE fdesc (pkt.weld_data_.act_voltage)
 	stat__ = IO_STATUS(fdesc)
 	IF stat__ <> 0 THEN RETURN (-stat__); ENDIF
@@ -408,6 +420,10 @@ BEGIN
 	IF stat__ <> 0 THEN RETURN (-stat__); ENDIF
 
 	WRITE fdesc (pkt.weld_data_.act_wire_spd)
+	stat__ = IO_STATUS(fdesc)
+	IF stat__ <> 0 THEN RETURN (-stat__); ENDIF
+
+	WRITE fdesc (pkt.weld_data_.mot_curr)
 	stat__ = IO_STATUS(fdesc)
 	IF stat__ <> 0 THEN RETURN (-stat__); ENDIF
 

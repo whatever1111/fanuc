@@ -48,14 +48,15 @@ CONST
 -- Welding state structure
 TYPE
 	weld_state_t = STRUCTURE
-		arc_ok         : BOOLEAN  -- I>0, Arc established (from Bit 0 of status word)
-		ready          : BOOLEAN  -- Welder is ready (from Bit 1 of status word)
-		stick_err      : BOOLEAN  -- Wire stick error (from Bit 2 of status word)  
-		power_err      : BOOLEAN  -- Power error (from DI[252] power error)
-		depos_di       : BOOLEAN  -- Deposition detection (from DI[251] original value)
-		act_voltage    : INTEGER  -- Actual voltage (raw ADC value)
-		act_current    : INTEGER  -- Actual current (raw ADC value)
-		act_wire_spd   : INTEGER  -- Actual wire speed (raw ADC value)
+		arc_ok         : BOOLEAN  -- I>0, Arc established (Bit 0)
+		power_err      : BOOLEAN  -- Power error (DI[252])
+		depos_di       : BOOLEAN  -- Deposition detection (DI[251])
+		ewm_err        : INTEGER  -- EWM error status word (GI[1])
+		warn_state     : INTEGER  -- Warning status word  (GI[6])
+		act_voltage    : INTEGER  -- Actual voltage (raw ADC value GI[2])
+		act_current    : INTEGER  -- Actual current (raw ADC value GI[3])
+		act_wire_spd   : INTEGER  -- Actual wire speed (raw ADC value GI[4])
+		mot_curr  : INTEGER  -- Motor current (raw ADC value GI[5])
 	ENDSTRUCTURE
 
 -- Complete welding packet structure
